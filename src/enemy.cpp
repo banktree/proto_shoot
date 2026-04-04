@@ -3,92 +3,88 @@
 #include <cmath>
 
 Enemy::Enemy(Vector3 spawnPos, EnemyType t)
-    : pos(spawnPos), type(t), shootTimer(0.5f), zigzagTimer(0.0f)
+    : pos(spawnPos), type(t), shootTimer(0.8f), zigzagTimer(0.0f)
 {
     switch (type) {
-        case EnemyType::Basic:
+        case EnemyType::Fighter:
             hp = maxHp = 3;
-            speed = 6.0f;
+            xSpeed = 12.0f;
             shootInterval = 1.6f;
-            collisionRadius = 1.0f;
+            collisionRadius = 1.1f;
             scoreValue = 100;
             break;
-        case EnemyType::Fast:
+        case EnemyType::Kamikaze:
             hp = maxHp = 1;
-            speed = 15.0f;
-            shootInterval = 2.5f;
-            collisionRadius = 0.7f;
+            xSpeed = 24.0f;   // beelines; speed used as vector magnitude
+            shootInterval = 99.0f;
+            collisionRadius = 0.8f;
             scoreValue = 150;
             break;
-        case EnemyType::Tank:
-            hp = maxHp = 10;
-            speed = 3.5f;
-            shootInterval = 1.0f;
-            collisionRadius = 1.8f;
-            scoreValue = 400;
+        case EnemyType::Turret:
+            hp = maxHp = 6;
+            xSpeed = 0.0f;
+            shootInterval = 1.1f;
+            collisionRadius = 1.2f;
+            scoreValue = 200;
+            pos.y = 0.5f;     // sit on the ground
             break;
         case EnemyType::Flanker:
             hp = maxHp = 3;
-            speed = 9.0f;
-            shootInterval = 1.2f;
-            collisionRadius = 0.9f;
-            scoreValue = 200;
+            xSpeed = 10.0f;
+            shootInterval = 1.3f;
+            collisionRadius = 1.0f;
+            scoreValue = 180;
             break;
     }
 }
 
 void Enemy::Update(float dt, Vector3 playerPos, std::vector<Bullet>& enemyBullets) {
-    Vector3 toPlayer = Vector3Subtract(playerPos, pos);
-    float dist = Vector3Length(toPlayer);
+    // ── Movement ──────────────────────────────────────────────────────────────
+    switch (type) {
+        case EnemyType::Fighter:
+            // Advance in -X; slow Z tracking
+            pos.x -= xSpeed * dt;
+            pos.z += Clamp(playerPos.z - pos.z, -5.0f, 5.0f) * dt;
+            break;
 
-    // ── Movement patterns ─────────────────────────────────────────────────────
-    Vector3 moveDir = {0.0f, 0.0f, 0.0f};
-
-    if (dist > 0.1f) {
-        Vector3 normalDir = Vector3Normalize(toPlayer);
-
-        switch (type) {
-            case EnemyType::Basic:
-            case EnemyType::Fast:
-            case EnemyType::Tank:
-                moveDir = normalDir;
-                break;
-
-            case EnemyType::Flanker: {
-                // Zigzag perpendicular to chase direction
-                zigzagTimer += dt;
-                Vector3 perp = {-normalDir.z, 0.0f, normalDir.x};
-                float zigzag = sinf(zigzagTimer * 3.5f) * 0.8f;
-                moveDir = Vector3Add(normalDir, Vector3Scale(perp, zigzag));
-                float mlen = Vector3Length(moveDir);
-                if (mlen > 0.001f) moveDir = Vector3Scale(moveDir, 1.0f / mlen);
-                break;
-            }
+        case EnemyType::Kamikaze: {
+            // Directly toward player at full speed
+            Vector3 dir = Vector3Subtract(playerPos, pos);
+            float dist = Vector3Length(dir);
+            if (dist > 0.1f)
+                pos = Vector3Add(pos, Vector3Scale(Vector3Scale(dir, 1.0f / dist), xSpeed * dt));
+            break;
         }
-    }
 
-    pos = Vector3Add(pos, Vector3Scale(moveDir, speed * dt));
+        case EnemyType::Turret:
+            // Stationary; slight Z rotation isn't modelled — just holds position
+            break;
+
+        case EnemyType::Flanker:
+            // Zigzag in Z while advancing
+            zigzagTimer += dt;
+            pos.x -= xSpeed * dt;
+            pos.z += sinf(zigzagTimer * 2.5f) * 9.0f * dt;
+            break;
+    }
 
     // ── Shooting ──────────────────────────────────────────────────────────────
     shootTimer -= dt;
-    if (shootTimer <= 0.0f && dist > 0.1f) {
+    if (shootTimer <= 0.0f) {
         shootTimer = shootInterval;
 
-        Vector3 dir = Vector3Normalize(toPlayer);
-        Vector3 vel = Vector3Scale(dir, 14.0f);
-        enemyBullets.emplace_back(pos, vel, 0.22f, 1, BulletOwner::Enemy, RED);
+        Vector3 dir = Vector3Subtract(playerPos, pos);
+        float dist = Vector3Length(dir);
+        if (dist > 0.1f) {
+            Vector3 vel = Vector3Scale(Vector3Scale(dir, 1.0f / dist), 18.0f);
+            enemyBullets.emplace_back(pos, vel, 0.22f, 1, BulletOwner::Enemy, RED, 3.0f);
 
-        // Tank fires a 3-way spread
-        if (type == EnemyType::Tank) {
-            for (int s : {-1, 1}) {
-                float ang = s * 12.0f * DEG2RAD;
-                float cs = cosf(ang), sn = sinf(ang);
-                Vector3 spreadVel = {
-                    vel.x * cs - vel.z * sn,
-                    0.0f,
-                    vel.x * sn + vel.z * cs
-                };
-                enemyBullets.emplace_back(pos, spreadVel, 0.22f, 1, BulletOwner::Enemy, ORANGE);
+            // Flanker fires a 3-way Z spread
+            if (type == EnemyType::Flanker) {
+                for (int s : {-1, 1}) {
+                    Vector3 sv = {vel.x, vel.y, vel.z + s * 7.0f};
+                    enemyBullets.emplace_back(pos, sv, 0.22f, 1, BulletOwner::Enemy, ORANGE, 3.0f);
+                }
             }
         }
     }
@@ -96,42 +92,40 @@ void Enemy::Update(float dt, Vector3 playerPos, std::vector<Bullet>& enemyBullet
 
 void Enemy::Draw() const {
     switch (type) {
-        case EnemyType::Basic:
-            DrawCube(pos, 1.6f, 0.45f, 1.6f, RED);
-            DrawCubeWires(pos, 1.6f, 0.45f, 1.6f, MAROON);
-            // Small "wing" nubs
-            {
-                Vector3 w = {pos.x, pos.y, pos.z};
-                DrawCube(w, 3.0f, 0.2f, 0.7f, (Color){200, 0, 0, 255});
-            }
+        case EnemyType::Fighter:
+            // Fuselage facing -X (coming at player)
+            DrawCube(pos, 2.0f, 0.4f, 1.5f, RED);
+            DrawCubeWires(pos, 2.0f, 0.4f, 1.5f, MAROON);
+            // Wings spanning Z
+            DrawCube({pos.x + 0.2f, pos.y, pos.z}, 0.8f, 0.2f, 3.6f, RED);
+            DrawSphere({pos.x + 0.7f, pos.y + 0.25f, pos.z}, 0.3f, (Color){200, 50, 50, 255});
             break;
 
-        case EnemyType::Fast:
-            DrawCube(pos, 0.9f, 0.28f, 1.8f, ORANGE);
-            DrawCubeWires(pos, 0.9f, 0.28f, 1.8f, RED);
+        case EnemyType::Kamikaze:
+            DrawCube(pos, 1.5f, 0.3f, 1.0f, ORANGE);
+            DrawCubeWires(pos, 1.5f, 0.3f, 1.0f, RED);
+            // Engine trail suggestion
+            DrawSphere({pos.x + 0.8f, pos.y, pos.z}, 0.25f, (Color){255, 100, 0, 180});
             break;
 
-        case EnemyType::Tank:
-            DrawCube(pos, 2.8f, 0.8f, 2.8f, DARKGREEN);
-            DrawCubeWires(pos, 2.8f, 0.8f, 2.8f, BLACK);
-            // Turret
-            {
-                Vector3 turret = {pos.x, pos.y + 0.7f, pos.z};
-                DrawCylinder(turret, 0.5f, 0.5f, 0.5f, 8, LIME);
-            }
+        case EnemyType::Turret: {
+            // Base block
+            DrawCube(pos, 1.8f, 0.5f, 1.8f, DARKGREEN);
+            DrawCubeWires(pos, 1.8f, 0.5f, 1.8f, BLACK);
+            // Dome
+            DrawSphere({pos.x, pos.y + 0.4f, pos.z}, 0.5f, LIME);
+            // Barrel pointing in -X
+            Vector3 barrel = {pos.x - 0.9f, pos.y + 0.4f, pos.z};
+            DrawCylinder(barrel, 0.12f, 0.12f, 1.0f, 8, DARKGRAY);
             break;
+        }
 
         case EnemyType::Flanker:
-            DrawCube(pos, 1.2f, 0.35f, 2.0f, PURPLE);
-            DrawCubeWires(pos, 1.2f, 0.35f, 2.0f, VIOLET);
-            {
-                Vector3 w = {pos.x, pos.y, pos.z + 0.2f};
-                DrawCube(w, 3.2f, 0.15f, 0.7f, (Color){150, 0, 200, 255});
-            }
+            DrawCube(pos, 1.8f, 0.3f, 2.0f, PURPLE);
+            DrawCubeWires(pos, 1.8f, 0.3f, 2.0f, VIOLET);
+            DrawCube({pos.x + 0.1f, pos.y, pos.z}, 0.6f, 0.15f, 3.8f, PURPLE);
             break;
     }
-
-    // HP bar floating above enemy — drawn via GetWorldToScreen in HUD
 }
 
 void Enemy::TakeDamage(int dmg) {

@@ -9,17 +9,18 @@
 
 Game::Game()
     : score(0), wave(1),
-      enemySpawnTimer(1.5f), enemySpawnInterval(2.0f),
-      enemiesPerWave(10), enemiesSpawned(0),
+      scrollSpeed(12.0f),
+      worldGenX(0.0f),
+      enemySpawnTimer(2.0f), enemySpawnInterval(3.0f),
       gameOver(false)
 {
-    InitWindow(SCREEN_W, SCREEN_H, "Proto Shoot — Isometric Aerial Combat");
+    InitWindow(SCREEN_W, SCREEN_H, "Proto Shoot — Zaxxon Style");
     SetTargetFPS(60);
+    rng.seed(42);
 
-    rng.seed(12345);
-
+    worldGenX = player.pos.x;
+    GenerateAhead();
     UpdateCamera();
-    GenerateObstacles();
 }
 
 Game::~Game() {
@@ -27,73 +28,88 @@ Game::~Game() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Main loop
+//  Run / Reset
 // ─────────────────────────────────────────────────────────────────────────────
 
 void Game::Run() {
     while (!WindowShouldClose()) {
         float dt = GetFrameTime();
-        if (!gameOver) {
-            Update(dt);
-        } else {
-            if (IsKeyPressed(KEY_R)) Reset();
-        }
+        if (!gameOver) Update(dt);
+        else if (IsKeyPressed(KEY_R)) Reset();
         Draw();
     }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Reset
-// ─────────────────────────────────────────────────────────────────────────────
 
 void Game::Reset() {
     player = Player();
     enemies.clear();
     playerBullets.clear();
     enemyBullets.clear();
+    walls.clear();
+    buildings.clear();
     bombEffects.clear();
-    score = 0;
-    wave  = 1;
-    enemySpawnTimer    = 1.5f;
-    enemySpawnInterval = 2.0f;
-    enemiesPerWave     = 10;
-    enemiesSpawned     = 0;
-    gameOver           = false;
+    score       = 0;
+    wave        = 1;
+    scrollSpeed = 12.0f;
+    worldGenX   = player.pos.x;
+    enemySpawnTimer    = 2.0f;
+    enemySpawnInterval = 3.0f;
+    gameOver = false;
+    GenerateAhead();
     UpdateCamera();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Obstacle generation
+//  Procedural terrain generation (Zaxxon-style walls + buildings)
 // ─────────────────────────────────────────────────────────────────────────────
 
-void Game::GenerateObstacles() {
-    std::uniform_real_distribution<float> posDist(-38.0f, 38.0f);
-    std::uniform_real_distribution<float> widthDist(1.5f, 4.5f);
-    std::uniform_real_distribution<float> heightDist(2.5f, 7.0f);
+void Game::GenerateAhead() {
+    std::uniform_real_distribution<float> zDist(-ARENA_Z_HALF + 2.5f, ARENA_Z_HALF - 2.5f);
+    std::uniform_real_distribution<float> gapBotDist(1.5f, 6.0f);
+    std::uniform_real_distribution<float> gapSizeDist(2.8f, 4.5f);
+    std::uniform_real_distribution<float> bwDist(1.0f, 3.5f);
+    std::uniform_real_distribution<float> bhDist(0.8f, 3.2f);
+    std::uniform_int_distribution<int>    wallChance(0, 4);
+    std::uniform_int_distribution<int>    numBldg(1, 3);
 
-    for (int i = 0; i < 25; ++i) {
-        float x = posDist(rng);
-        float z = posDist(rng);
+    float genTarget = player.pos.x + GEN_LOOKAHEAD;
 
-        // Clear zone around player start
-        if (fabsf(x) < 9.0f && fabsf(z) < 9.0f) continue;
+    while (worldGenX < genTarget) {
+        worldGenX += SECTION_LEN;
 
-        float w = widthDist(rng);
-        float h = heightDist(rng);
-        float d = widthDist(rng);
+        // ── Wall (roughly every 4-5 sections) ────────────────────────────────
+        if (wallChance(rng) == 0) {
+            Wall w;
+            w.x         = worldGenX;
+            w.gapBottom = gapBotDist(rng);
+            w.gapTop    = w.gapBottom + gapSizeDist(rng);
+            if (w.gapTop > WALL_HEIGHT - 0.5f) w.gapTop = WALL_HEIGHT - 0.5f;
+            w.passed = false;
+            walls.push_back(w);
+        }
 
-        Obstacle obs;
-        obs.pos      = {x, h * 0.5f, z};
-        obs.halfSize = {w * 0.5f, h * 0.5f, d * 0.5f};
-
-        // Colour variation: sandy browns / greys
-        unsigned char r = (unsigned char)(90 + (int)(h * 12));
-        unsigned char g = (unsigned char)(70 + (int)(w * 8));
-        unsigned char b = (unsigned char)(50);
-        obs.color = {r, g, b, 255};
-
-        obstacles.push_back(obs);
+        // ── Buildings (ground-level hazards / scenery) ────────────────────────
+        int n = numBldg(rng);
+        for (int i = 0; i < n; ++i) {
+            float bw = bwDist(rng);
+            float bh = bhDist(rng);
+            float bd = bwDist(rng);
+            Building b;
+            b.pos      = {worldGenX + zDist(rng) * 0.25f, bh * 0.5f, zDist(rng)};
+            b.halfSize = {bw * 0.5f, bh * 0.5f, bd * 0.5f};
+            unsigned char cr = (unsigned char)(80 + (int)(bh * 18));
+            unsigned char cg = (unsigned char)(70 + (int)(bw * 10));
+            b.color = {cr, cg, 50, 255};
+            buildings.push_back(b);
+        }
     }
+
+    // ── Cleanup old content behind the player ─────────────────────────────────
+    float cutX = player.pos.x - DESPAWN_BEHIND;
+    walls.erase(std::remove_if(walls.begin(), walls.end(),
+        [cutX](const Wall& w) { return w.x < cutX; }), walls.end());
+    buildings.erase(std::remove_if(buildings.begin(), buildings.end(),
+        [cutX](const Building& b) { return b.pos.x + b.halfSize.x < cutX; }), buildings.end());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -101,87 +117,59 @@ void Game::GenerateObstacles() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void Game::Update(float dt) {
-    // Player
-    player.Update(dt, playerBullets);
+    player.Update(dt, playerBullets, scrollSpeed);
 
-    // Bomb activation
     if (player.usedBomb) ApplyBomb();
 
-    // Obstacle push-back for player (simple sphere-vs-AABB)
-    for (const auto& obs : obstacles) {
-        float nearX = Clamp(player.pos.x, obs.pos.x - obs.halfSize.x, obs.pos.x + obs.halfSize.x);
-        float nearZ = Clamp(player.pos.z, obs.pos.z - obs.halfSize.z, obs.pos.z + obs.halfSize.z);
-        float dx = player.pos.x - nearX;
-        float dz = player.pos.z - nearZ;
-        const float playerR = 1.1f;
-        if (dx * dx + dz * dz < playerR * playerR) {
-            float dist = sqrtf(dx * dx + dz * dz);
-            Vector3 push = (dist < 0.001f)
-                ? Vector3{1.0f, 0.0f, 0.0f}
-                : Vector3{dx / dist, 0.0f, dz / dist};
-            player.pos.x = nearX + push.x * playerR;
-            player.pos.z = nearZ + push.z * playerR;
-        }
-    }
+    GenerateAhead();
 
     // Enemy spawning
     enemySpawnTimer -= dt;
-    if (enemySpawnTimer <= 0.0f && enemiesSpawned < enemiesPerWave) {
+    if (enemySpawnTimer <= 0.0f) {
         SpawnEnemy();
         enemySpawnTimer = enemySpawnInterval;
     }
 
-    // Wave clear check
-    if (enemiesSpawned >= enemiesPerWave && enemies.empty()) {
-        wave++;
-        enemiesPerWave     = 8 + wave * 4;
-        enemiesSpawned     = 0;
-        enemySpawnInterval = std::max(0.7f, 2.0f - wave * 0.1f);
-        player.bombs       = std::min(player.bombs + 1, player.maxBombs);
-    }
-
-    // Enemies
+    // Update enemies
     for (auto& e : enemies) {
         e.Update(dt, player.pos, enemyBullets);
     }
 
-    // Bullets
+    // Update bullets
     for (auto& b : playerBullets) b.Update(dt);
     for (auto& b : enemyBullets)  b.Update(dt);
 
     // Bomb effects
     for (auto& bf : bombEffects) {
         if (!bf.active) continue;
-        bf.timer -= dt;
-        bf.radius = bf.maxRadius * (1.0f - bf.timer / bf.duration);
+        bf.timer  -= dt;
+        bf.radius  = bf.maxRadius * (1.0f - bf.timer / bf.duration);
         if (bf.timer <= 0.0f) bf.active = false;
     }
 
     CheckCollisions();
 
-    // Tally score for enemies killed this frame, then remove them
+    // Score for enemies killed THIS frame
     for (const auto& e : enemies) {
         if (!e.IsAlive()) score += e.scoreValue;
     }
-    enemies.erase(
-        std::remove_if(enemies.begin(), enemies.end(),
-                       [](const Enemy& e) { return !e.IsAlive(); }),
-        enemies.end());
 
-    playerBullets.erase(
-        std::remove_if(playerBullets.begin(), playerBullets.end(),
-                       [](const Bullet& b) { return !b.active; }),
-        playerBullets.end());
+    // Remove dead enemies + enemies that flew past the player
+    enemies.erase(std::remove_if(enemies.begin(), enemies.end(),
+        [&](const Enemy& e) {
+            return !e.IsAlive() || (e.pos.x < player.pos.x - DESPAWN_BEHIND);
+        }), enemies.end());
 
-    enemyBullets.erase(
-        std::remove_if(enemyBullets.begin(), enemyBullets.end(),
-                       [](const Bullet& b) { return !b.active; }),
-        enemyBullets.end());
+    playerBullets.erase(std::remove_if(playerBullets.begin(), playerBullets.end(),
+        [](const Bullet& b) { return !b.active; }), playerBullets.end());
+    enemyBullets.erase(std::remove_if(enemyBullets.begin(), enemyBullets.end(),
+        [](const Bullet& b) { return !b.active; }), enemyBullets.end());
+    bombEffects.erase(std::remove_if(bombEffects.begin(), bombEffects.end(),
+        [](const BombEffect& bf) { return !bf.active; }), bombEffects.end());
 
-    bombEffects.erase(
-        std::remove_if(bombEffects.begin(), bombEffects.end(),
-                       [](const BombEffect& bf) { return !bf.active; }),
-        bombEffects.end());
+    // Wave progression: speed up every 30 seconds of survival
+    scrollSpeed = 12.0f + wave * 1.5f;
+    wave = 1 + (int)(score / 2000);
 
     if (!player.IsAlive()) gameOver = true;
 
@@ -193,26 +181,23 @@ void Game::Update(float dt) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void Game::SpawnEnemy() {
-    std::uniform_real_distribution<float> angleDist(0.0f, 2.0f * PI);
+    std::uniform_real_distribution<float> zDist(-ARENA_Z_HALF + 2.0f, ARENA_Z_HALF - 2.0f);
+    std::uniform_real_distribution<float> yDist(0.5f, 8.0f);
     std::uniform_real_distribution<float> typeDist(0.0f, 1.0f);
 
-    float   angle     = angleDist(rng);
-    float   spawnDist = ARENA_SIZE * 0.85f;
-    Vector3 spawnPos  = {
-        Clamp(player.pos.x + cosf(angle) * spawnDist, -ARENA_SIZE, ARENA_SIZE),
-        1.0f,
-        Clamp(player.pos.z + sinf(angle) * spawnDist, -ARENA_SIZE, ARENA_SIZE)
-    };
-
+    float spawnX = player.pos.x + ENEMY_SPAWN_X;
+    float spawnZ = zDist(rng);
     float r = typeDist(rng);
-    EnemyType type;
-    if      (wave >= 3 && r < 0.20f) type = EnemyType::Tank;
-    else if (wave >= 2 && r < 0.50f) type = EnemyType::Flanker;
-    else if (             r < 0.70f) type = EnemyType::Basic;
-    else                             type = EnemyType::Fast;
 
-    enemies.emplace_back(spawnPos, type);
-    enemiesSpawned++;
+    EnemyType type;
+    if      (wave >= 3 && r < 0.20f) type = EnemyType::Flanker;
+    else if (wave >= 2 && r < 0.35f) type = EnemyType::Turret;
+    else if (             r < 0.15f) type = EnemyType::Kamikaze;
+    else                             type = EnemyType::Fighter;
+
+    float spawnY = (type == EnemyType::Turret) ? 0.5f : yDist(rng);
+
+    enemies.emplace_back(Vector3{spawnX, spawnY, spawnZ}, type);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -220,25 +205,19 @@ void Game::SpawnEnemy() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void Game::ApplyBomb() {
-    // Damage enemies in radius
     for (auto& e : enemies) {
-        if (Vector3Distance(e.pos, player.pos) < BOMB_RADIUS) {
+        if (Vector3Distance(e.pos, player.pos) < BOMB_RADIUS)
             e.TakeDamage(999);
-        }
     }
-    // Clear enemy bullets in radius
     for (auto& b : enemyBullets) {
-        if (Vector3Distance(b.pos, player.pos) < BOMB_RADIUS) {
+        if (Vector3Distance(b.pos, player.pos) < BOMB_RADIUS)
             b.active = false;
-        }
     }
-    // Visual shockwave
     BombEffect bf;
     bf.pos       = player.pos;
     bf.radius    = 0.0f;
     bf.maxRadius = BOMB_RADIUS;
-    bf.duration  = 0.6f;
-    bf.timer     = bf.duration;
+    bf.duration  = bf.timer = 0.6f;
     bf.active    = true;
     bombEffects.push_back(bf);
 }
@@ -248,7 +227,7 @@ void Game::ApplyBomb() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void Game::CheckCollisions() {
-    // Player bullets vs enemies
+    // ── Player bullets vs enemies ─────────────────────────────────────────────
     for (auto& b : playerBullets) {
         if (!b.active) continue;
         for (auto& e : enemies) {
@@ -261,7 +240,7 @@ void Game::CheckCollisions() {
         }
     }
 
-    // Enemy bullets vs player
+    // ── Enemy bullets vs player ───────────────────────────────────────────────
     for (auto& b : enemyBullets) {
         if (!b.active) continue;
         if (Vector3Distance(b.pos, player.pos) < 0.9f + b.radius) {
@@ -270,50 +249,78 @@ void Game::CheckCollisions() {
         }
     }
 
-    // Enemy body vs player (ram)
+    // ── Enemy body vs player (ram) ────────────────────────────────────────────
     for (auto& e : enemies) {
         if (!e.IsAlive()) continue;
-        float dist = Vector3Distance(e.pos, player.pos);
         float minDist = e.collisionRadius + 0.8f;
-        if (dist < minDist) {
+        if (Vector3Distance(e.pos, player.pos) < minDist)
             player.TakeDamage(1);
-            Vector3 dir = (dist < 0.001f)
-                ? Vector3{1.0f, 0.0f, 0.0f}
-                : Vector3Normalize(Vector3Subtract(e.pos, player.pos));
-            e.pos = Vector3Add(player.pos, Vector3Scale(dir, minDist + 0.05f));
+    }
+
+    // ── Player vs walls (core Zaxxon mechanic) ────────────────────────────────
+    for (auto& w : walls) {
+        float dx = fabsf(player.pos.x - w.x);
+        if (dx < WALL_THICKNESS * 0.5f + 0.9f) {
+            bool inGap = (player.pos.y >= w.gapBottom && player.pos.y <= w.gapTop);
+            if (!inGap) {
+                player.TakeDamage(1);
+            } else if (!w.passed && player.pos.x >= w.x) {
+                w.passed = true;
+                score += 50;   // bonus for clean wall pass
+            }
         }
     }
 
-    // Bullets vs obstacles
-    auto blocksBullet = [&](Bullet& b) {
+    // ── Player vs buildings ───────────────────────────────────────────────────
+    for (const auto& bld : buildings) {
+        BoundingBox bb = {
+            {bld.pos.x - bld.halfSize.x, bld.pos.y - bld.halfSize.y, bld.pos.z - bld.halfSize.z},
+            {bld.pos.x + bld.halfSize.x, bld.pos.y + bld.halfSize.y, bld.pos.z + bld.halfSize.z}
+        };
+        if (CheckCollisionBoxSphere(bb, player.pos, 0.8f))
+            player.TakeDamage(1);
+    }
+
+    // ── Bullets vs walls ──────────────────────────────────────────────────────
+    auto blockByWalls = [&](Bullet& b) {
         if (!b.active) return;
-        for (const auto& obs : obstacles) {
-            BoundingBox bb = {
-                {obs.pos.x - obs.halfSize.x, obs.pos.y - obs.halfSize.y, obs.pos.z - obs.halfSize.z},
-                {obs.pos.x + obs.halfSize.x, obs.pos.y + obs.halfSize.y, obs.pos.z + obs.halfSize.z}
-            };
-            if (CheckCollisionBoxSphere(bb, b.pos, b.radius)) {
-                b.active = false;
-                return;
+        for (const auto& w : walls) {
+            if (fabsf(b.pos.x - w.x) < WALL_THICKNESS * 0.5f + b.radius) {
+                bool inGap = (b.pos.y >= w.gapBottom && b.pos.y <= w.gapTop);
+                if (!inGap) { b.active = false; return; }
             }
         }
     };
+    for (auto& b : playerBullets) blockByWalls(b);
+    for (auto& b : enemyBullets)  blockByWalls(b);
 
-    for (auto& b : playerBullets) blocksBullet(b);
-    for (auto& b : enemyBullets)  blocksBullet(b);
+    // ── Player bullets vs buildings ───────────────────────────────────────────
+    for (auto& b : playerBullets) {
+        if (!b.active) continue;
+        for (const auto& bld : buildings) {
+            BoundingBox bb = {
+                {bld.pos.x - bld.halfSize.x, bld.pos.y - bld.halfSize.y, bld.pos.z - bld.halfSize.z},
+                {bld.pos.x + bld.halfSize.x, bld.pos.y + bld.halfSize.y, bld.pos.z + bld.halfSize.z}
+            };
+            if (CheckCollisionBoxSphere(bb, b.pos, b.radius)) {
+                b.active = false;
+                break;
+            }
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Camera — classic isometric angle
+//  Camera — isometric, follows player X & Z (Zaxxon angle)
 // ─────────────────────────────────────────────────────────────────────────────
 
 void Game::UpdateCamera() {
-    // Equal offset on X/Y/Z gives true isometric elevation (~35.26°)
+    // Equal offset on all axes → classic isometric elevation (~35.26°)
     const float D = 32.0f;
-    camera.position  = {player.pos.x + D, D, player.pos.z + D};
-    camera.target    = {player.pos.x,     0.0f, player.pos.z};
-    camera.up        = {0.0f, 1.0f, 0.0f};
-    camera.fovy      = 28.0f;                 // ortho view height in world units
+    camera.position   = {player.pos.x + D, D, player.pos.z + D};
+    camera.target     = {player.pos.x, 0.0f, player.pos.z};
+    camera.up         = {0.0f, 1.0f, 0.0f};
+    camera.fovy       = 28.0f;
     camera.projection = CAMERA_ORTHOGRAPHIC;
 }
 
@@ -326,26 +333,14 @@ void Game::Draw() {
     ClearBackground({8, 16, 36, 255});
 
     BeginMode3D(camera);
-
         DrawTerrain();
-        DrawObstacles();
-
-        // Bomb shockwave rings
+        DrawBuildings();
+        DrawWalls();
         DrawBombEffects();
-
-        // Entities
         player.Draw();
         for (const auto& e : enemies)       e.Draw();
         for (const auto& b : playerBullets) b.Draw();
         for (const auto& b : enemyBullets)  b.Draw();
-
-        // Arena boundary markers
-        Color boundCol = {80, 80, 200, 180};
-        DrawLine3D({-ARENA_SIZE, 0.05f, -ARENA_SIZE}, { ARENA_SIZE, 0.05f, -ARENA_SIZE}, boundCol);
-        DrawLine3D({ ARENA_SIZE, 0.05f, -ARENA_SIZE}, { ARENA_SIZE, 0.05f,  ARENA_SIZE}, boundCol);
-        DrawLine3D({ ARENA_SIZE, 0.05f,  ARENA_SIZE}, {-ARENA_SIZE, 0.05f,  ARENA_SIZE}, boundCol);
-        DrawLine3D({-ARENA_SIZE, 0.05f,  ARENA_SIZE}, {-ARENA_SIZE, 0.05f, -ARENA_SIZE}, boundCol);
-
     EndMode3D();
 
     DrawHUD();
@@ -353,27 +348,63 @@ void Game::Draw() {
 }
 
 void Game::DrawTerrain() {
-    // Ground plane
-    DrawPlane({0.0f, 0.0f, 0.0f}, {ARENA_SIZE * 2.0f, ARENA_SIZE * 2.0f}, {28, 55, 28, 255});
+    // Scrolling ground plane (wide enough to fill the view)
+    const float GW = 160.0f;
+    DrawPlane({player.pos.x, 0.0f, 0.0f},
+              {GW, (ARENA_Z_HALF + 6.0f) * 2.0f}, {28, 55, 28, 255});
 
-    // Grid
-    Color gridCol = {42, 72, 42, 255};
-    for (int i = -(int)ARENA_SIZE; i <= (int)ARENA_SIZE; i += 5) {
-        DrawLine3D({(float)i, 0.02f, -ARENA_SIZE}, {(float)i, 0.02f, ARENA_SIZE}, gridCol);
-        DrawLine3D({-ARENA_SIZE, 0.02f, (float)i}, {ARENA_SIZE, 0.02f, (float)i}, gridCol);
+    // Grid lines
+    Color gc = {42, 72, 42, 255};
+    float x0 = floorf((player.pos.x - 70.0f) / 5.0f) * 5.0f;
+    float x1 = player.pos.x + 70.0f;
+    for (float x = x0; x < x1; x += 5.0f)
+        DrawLine3D({x, 0.02f, -ARENA_Z_HALF}, {x, 0.02f, ARENA_Z_HALF}, gc);
+    for (float z = -ARENA_Z_HALF; z <= ARENA_Z_HALF; z += 5.0f)
+        DrawLine3D({x0, 0.02f, z}, {x1, 0.02f, z}, gc);
+
+    // Side boundary lines
+    Color bc = {80, 80, 200, 180};
+    DrawLine3D({x0, 0.05f, -ARENA_Z_HALF}, {x1, 0.05f, -ARENA_Z_HALF}, bc);
+    DrawLine3D({x0, 0.05f,  ARENA_Z_HALF}, {x1, 0.05f,  ARENA_Z_HALF}, bc);
+}
+
+void Game::DrawWalls() {
+    Color wallCol = {110, 115, 125, 255};
+    Color wireCol = { 60,  65,  75, 255};
+    const float halfZ = ARENA_Z_HALF * 2.0f;
+
+    for (const auto& w : walls) {
+        // Bottom section: ground → gapBottom
+        if (w.gapBottom > 0.05f) {
+            float h   = w.gapBottom;
+            Vector3 p = {w.x, h * 0.5f, 0.0f};
+            DrawCube(p, WALL_THICKNESS, h, halfZ, wallCol);
+            DrawCubeWires(p, WALL_THICKNESS, h, halfZ, wireCol);
+        }
+        // Top section: gapTop → WALL_HEIGHT
+        float topH = WALL_HEIGHT - w.gapTop;
+        if (topH > 0.05f) {
+            Vector3 p = {w.x, w.gapTop + topH * 0.5f, 0.0f};
+            DrawCube(p, WALL_THICKNESS, topH, halfZ, wallCol);
+            DrawCubeWires(p, WALL_THICKNESS, topH, halfZ, wireCol);
+        }
+        // Gap highlight line (shows the opening altitude)
+        Color gapCol = {200, 200, 80, 160};
+        DrawLine3D({w.x, w.gapBottom, -ARENA_Z_HALF}, {w.x, w.gapBottom, ARENA_Z_HALF}, gapCol);
+        DrawLine3D({w.x, w.gapTop,    -ARENA_Z_HALF}, {w.x, w.gapTop,    ARENA_Z_HALF}, gapCol);
     }
 }
 
-void Game::DrawObstacles() {
-    for (const auto& obs : obstacles) {
-        float w = obs.halfSize.x * 2.0f;
-        float h = obs.halfSize.y * 2.0f;
-        float d = obs.halfSize.z * 2.0f;
-        DrawCube(obs.pos, w, h, d, obs.color);
-        Color wireCol = {(unsigned char)(obs.color.r / 2),
-                         (unsigned char)(obs.color.g / 2),
-                         (unsigned char)(obs.color.b / 2), 255};
-        DrawCubeWires(obs.pos, w, h, d, wireCol);
+void Game::DrawBuildings() {
+    for (const auto& b : buildings) {
+        float w = b.halfSize.x * 2.0f;
+        float h = b.halfSize.y * 2.0f;
+        float d = b.halfSize.z * 2.0f;
+        DrawCube(b.pos, w, h, d, b.color);
+        Color wc = {(unsigned char)(b.color.r / 2),
+                    (unsigned char)(b.color.g / 2),
+                    (unsigned char)(b.color.b / 2), 255};
+        DrawCubeWires(b.pos, w, h, d, wc);
     }
 }
 
@@ -381,72 +412,99 @@ void Game::DrawBombEffects() {
     for (const auto& bf : bombEffects) {
         if (!bf.active) continue;
         float alpha = bf.timer / bf.duration;
-        Color ringCol = {255, 200, 50, (unsigned char)(200 * alpha)};
-        // Draw as stacked rings
+        Color rc = {255, 220, 60, (unsigned char)(200 * alpha)};
         for (int ring = 0; ring < 3; ++ring) {
-            float r = bf.radius - ring * 0.8f;
-            if (r > 0.0f) {
-                DrawCircle3D({bf.pos.x, 0.3f + ring * 0.4f, bf.pos.z},
-                             r, {1.0f, 0.0f, 0.0f}, 90.0f, ringCol);
-            }
+            float r = bf.radius - ring * 1.0f;
+            if (r > 0.0f)
+                DrawCircle3D({bf.pos.x, 0.5f + ring * 0.6f, bf.pos.z},
+                             r, {1.0f, 0.0f, 0.0f}, 90.0f, rc);
         }
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  HUD
+// ─────────────────────────────────────────────────────────────────────────────
+
 void Game::DrawHUD() {
-    // ── HP bar ─────────────────────────────────────────────────────────────────
-    const int barW = 200, barH = 22;
-    DrawRectangle(20, 20, barW, barH, DARKGRAY);
-    int filledW = (int)(barW * (float)player.hp / player.maxHp);
+    // ── HP bar ────────────────────────────────────────────────────────────────
+    DrawRectangle(20, 20, 200, 22, DARKGRAY);
+    int fw = (int)(200 * (float)player.hp / player.maxHp);
     Color hpCol = (player.hp > player.maxHp / 2) ? GREEN
-                : (player.hp > 1)                ? YELLOW
-                                                 : RED;
-    DrawRectangle(20, 20, filledW, barH, hpCol);
-    DrawRectangleLines(20, 20, barW, barH, WHITE);
+                : (player.hp > 1)                ? YELLOW : RED;
+    DrawRectangle(20, 20, fw, 22, hpCol);
+    DrawRectangleLines(20, 20, 200, 22, WHITE);
     DrawText(TextFormat("HP  %d / %d", player.hp, player.maxHp), 28, 23, 15, WHITE);
 
-    // ── Bombs ──────────────────────────────────────────────────────────────────
+    // ── Bomb stock ────────────────────────────────────────────────────────────
     DrawText("BOMB", 20, 50, 14, GRAY);
     for (int i = 0; i < player.maxBombs; ++i) {
-        Color bombCol = (i < player.bombs) ? GOLD : DARKGRAY;
-        DrawRectangle(60 + i * 22, 48, 18, 18, bombCol);
+        Color bc = (i < player.bombs) ? GOLD : DARKGRAY;
+        DrawRectangle(60 + i * 22, 48, 18, 18, bc);
         DrawRectangleLines(60 + i * 22, 48, 18, 18, WHITE);
     }
 
-    // ── Score / Wave / Enemies ────────────────────────────────────────────────
-    DrawText(TextFormat("SCORE  %06d", score),               SCREEN_W - 220, 20, 20, WHITE);
-    DrawText(TextFormat("WAVE   %d",   wave),                SCREEN_W - 220, 46, 18, ORANGE);
-    int remaining = (enemiesPerWave - enemiesSpawned) + (int)enemies.size();
-    DrawText(TextFormat("ENEMIES %d",  remaining),           SCREEN_W - 220, 70, 18, RED);
+    // ── Altitude meter (vertical bar, right side — Zaxxon style) ─────────────
+    const int altX = SCREEN_W - 42;
+    const int altY = 20;
+    const int altH = 200;
+    DrawRectangle(altX, altY, 20, altH, DARKGRAY);
+    float altRatio = (player.pos.y - 0.5f) / 9.5f;
+    int   altFill  = (int)(altH * Clamp(altRatio, 0.0f, 1.0f));
+    DrawRectangle(altX, altY + altH - altFill, 20, altFill, SKYBLUE);
+    DrawRectangleLines(altX, altY, 20, altH, WHITE);
+    DrawText("ALT", altX - 2, altY + altH + 4, 14, SKYBLUE);
 
-    // ── Enemy HP bars (world → screen) ────────────────────────────────────────
+    // ── Score / Wave ──────────────────────────────────────────────────────────
+    DrawText(TextFormat("SCORE %06d", score), SCREEN_W - 230, 20, 20, WHITE);
+    DrawText(TextFormat("WAVE  %d",   wave),  SCREEN_W - 230, 46, 18, ORANGE);
+
+    // ── Enemy HP bars (world → screen) ───────────────────────────────────────
     for (const auto& e : enemies) {
         if (!e.IsAlive()) continue;
-        Vector3 aboveEnemy = {e.pos.x, e.pos.y + 2.5f, e.pos.z};
-        Vector2 sp = GetWorldToScreen(aboveEnemy, camera);
-        int bw = 40;
+        Vector2 sp = GetWorldToScreen({e.pos.x, e.pos.y + 2.5f, e.pos.z}, camera);
+        if (sp.x < 0 || sp.x > SCREEN_W || sp.y < 0 || sp.y > SCREEN_H) continue;
+        int bw = 36;
         int bx = (int)sp.x - bw / 2;
         int by = (int)sp.y - 6;
         DrawRectangle(bx, by, bw, 5, DARKGRAY);
         DrawRectangle(bx, by, (int)(bw * (float)e.hp / e.maxHp), 5, LIME);
     }
 
-    // ── Controls hint ──────────────────────────────────────────────────────────
-    DrawText("WASD Move   Z Primary   X Spread   C Bomb", 20, SCREEN_H - 26, 15, LIGHTGRAY);
+    // ── Next-wall altitude indicator (HUD hint) ───────────────────────────────
+    for (const auto& w : walls) {
+        float distToWall = w.x - player.pos.x;
+        if (distToWall > 0.0f && distToWall < 40.0f && !w.passed) {
+            int barX = SCREEN_W / 2 - 60;
+            int barY = SCREEN_H - 60;
+            DrawText("WALL", barX, barY - 16, 16, YELLOW);
+            // mini altitude bar showing gap range
+            DrawRectangle(barX, barY, 120, 16, DARKGRAY);
+            int gapY1 = barY + 16 - (int)(16 * w.gapTop   / WALL_HEIGHT);
+            int gapY2 = barY + 16 - (int)(16 * w.gapBottom / WALL_HEIGHT);
+            DrawRectangle(barX, gapY1, 120, gapY2 - gapY1, GREEN);
+            // player altitude indicator on the bar
+            int playerBar = barY + 16 - (int)(16 * player.pos.y / WALL_HEIGHT);
+            DrawRectangle(barX - 4, playerBar - 2, 128, 4, WHITE);
+            DrawRectangleLines(barX, barY, 120, 16, WHITE);
+            break;
+        }
+    }
 
-    // ── Game Over overlay ──────────────────────────────────────────────────────
+    // ── Controls ──────────────────────────────────────────────────────────────
+    DrawText("Arrows: Move/Alt   Z: Shot   X: Spread   C: Bomb", 20, SCREEN_H - 26, 15, LIGHTGRAY);
+
+    // ── Game Over ─────────────────────────────────────────────────────────────
     if (gameOver) {
         DrawRectangle(0, 0, SCREEN_W, SCREEN_H, {0, 0, 0, 160});
         const char* goText = "GAME OVER";
         int tw = MeasureText(goText, 72);
         DrawText(goText, SCREEN_W / 2 - tw / 2, SCREEN_H / 2 - 70, 72, RED);
-
-        const char* scoreText = TextFormat("Final Score: %d", score);
-        int sw = MeasureText(scoreText, 32);
-        DrawText(scoreText, SCREEN_W / 2 - sw / 2, SCREEN_H / 2 + 16, 32, WHITE);
-
-        const char* restartText = "Press  R  to restart";
-        int rw = MeasureText(restartText, 24);
-        DrawText(restartText, SCREEN_W / 2 - rw / 2, SCREEN_H / 2 + 62, 24, LIGHTGRAY);
+        const char* st = TextFormat("Final Score: %d", score);
+        int sw = MeasureText(st, 32);
+        DrawText(st, SCREEN_W / 2 - sw / 2, SCREEN_H / 2 + 16, 32, WHITE);
+        const char* rt = "Press  R  to restart";
+        int rw = MeasureText(rt, 24);
+        DrawText(rt, SCREEN_W / 2 - rw / 2, SCREEN_H / 2 + 62, 24, LIGHTGRAY);
     }
 }

@@ -3,7 +3,11 @@
 #include "bullet.h"
 #include <vector>
 
-enum class EnemyType { Basic, Fast, Tank, Flanker };
+// Fighter  : aerial, advances in -X, tracks player Z
+// Kamikaze : fast, beelines directly at player
+// Turret   : stationary on ground, shoots at player
+// Flanker  : zigzags in Z while advancing in -X
+enum class EnemyType { Fighter, Kamikaze, Turret, Flanker };
 
 class Enemy {
 public:
@@ -23,6 +27,6 @@ public:
 private:
     float shootTimer;
     float shootInterval;
-    float speed;
+    float xSpeed;        // advance speed in -X direction
     float zigzagTimer;
 };

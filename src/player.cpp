@@ -2,10 +2,8 @@
 #include "raymath.h"
 #include <cmath>
 
-static constexpr float ARENA_BOUND = 44.0f;
-
 Player::Player()
-    : pos({0.0f, 1.0f, 0.0f}),
+    : pos({0.0f, 3.0f, 0.0f}),
       hp(5), maxHp(5),
       bombs(3), maxBombs(3),
       usedBomb(false),
@@ -14,46 +12,43 @@ Player::Player()
       invincibleTimer(0.0f)
 {}
 
-void Player::Update(float dt, std::vector<Bullet>& playerBullets) {
+void Player::Update(float dt, std::vector<Bullet>& playerBullets, float scrollSpeed) {
     usedBomb = false;
 
-    // ── Movement ────────────────────────────────────────────────────────────
-    Vector3 dir = {0.0f, 0.0f, 0.0f};
-    if (IsKeyDown(KEY_W)) dir.z -= 1.0f;
-    if (IsKeyDown(KEY_S)) dir.z += 1.0f;
-    if (IsKeyDown(KEY_A)) dir.x -= 1.0f;
-    if (IsKeyDown(KEY_D)) dir.x += 1.0f;
+    // ── Auto-scroll forward (+X) ──────────────────────────────────────────────
+    pos.x += scrollSpeed * dt;
 
-    float len = Vector3Length(dir);
-    if (len > 0.0f) {
-        dir = Vector3Scale(dir, SPEED * dt / len);
-        pos = Vector3Add(pos, dir);
-    }
+    // ── Arrow keys ────────────────────────────────────────────────────────────
+    // UP / DOWN  → altitude
+    if (IsKeyDown(KEY_UP))    pos.y += CLIMB_SPEED  * dt;
+    if (IsKeyDown(KEY_DOWN))  pos.y -= CLIMB_SPEED  * dt;
+    // LEFT / RIGHT → strafe (Z axis)
+    if (IsKeyDown(KEY_LEFT))  pos.z -= STRAFE_SPEED * dt;
+    if (IsKeyDown(KEY_RIGHT)) pos.z += STRAFE_SPEED * dt;
 
-    pos.x = Clamp(pos.x, -ARENA_BOUND, ARENA_BOUND);
-    pos.z = Clamp(pos.z, -ARENA_BOUND, ARENA_BOUND);
+    pos.y = Clamp(pos.y, MIN_ALT, MAX_ALT);
+    pos.z = Clamp(pos.z, -Z_BOUND, Z_BOUND);
 
-    // ── Timers ───────────────────────────────────────────────────────────────
-    if (primaryTimer   > 0.0f) primaryTimer   -= dt;
-    if (secondaryTimer > 0.0f) secondaryTimer -= dt;
+    // ── Timers ────────────────────────────────────────────────────────────────
+    if (primaryTimer    > 0.0f) primaryTimer    -= dt;
+    if (secondaryTimer  > 0.0f) secondaryTimer  -= dt;
     if (invincibleTimer > 0.0f) invincibleTimer -= dt;
 
-    // ── Z: Primary fire — straight shot ──────────────────────────────────────
+    // ── Z: Primary fire — straight forward ───────────────────────────────────
     if (IsKeyDown(KEY_Z) && primaryTimer <= 0.0f) {
         primaryTimer = PRIMARY_RATE;
-        Vector3 bPos = {pos.x, pos.y, pos.z - 1.0f};
-        Vector3 bVel = {0.0f, 0.0f, -40.0f};
-        playerBullets.emplace_back(bPos, bVel, 0.2f, 1, BulletOwner::Player, YELLOW);
+        Vector3 bPos = {pos.x + 1.5f, pos.y, pos.z};
+        playerBullets.emplace_back(bPos, Vector3{55.0f, 0.0f, 0.0f},
+                                   0.2f, 1, BulletOwner::Player, YELLOW, 1.5f);
     }
 
-    // ── X: Secondary fire — spread shot ──────────────────────────────────────
+    // ── X: Spread shot — forward + Z fan ─────────────────────────────────────
     if (IsKeyDown(KEY_X) && secondaryTimer <= 0.0f) {
         secondaryTimer = SECONDARY_RATE;
-        const float angles[] = {-20.0f, -10.0f, 0.0f, 10.0f, 20.0f};
-        for (float angle : angles) {
-            float rad = angle * DEG2RAD;
-            Vector3 bVel = {sinf(rad) * 30.0f, 0.0f, -cosf(rad) * 30.0f};
-            playerBullets.emplace_back(pos, bVel, 0.22f, 1, BulletOwner::Player, ORANGE);
+        const float zVels[] = {-10.0f, 0.0f, 10.0f};
+        for (float zv : zVels) {
+            playerBullets.emplace_back(pos, Vector3{45.0f, 0.0f, zv},
+                                       0.22f, 1, BulletOwner::Player, ORANGE, 1.2f);
         }
     }
 
@@ -65,36 +60,36 @@ void Player::Update(float dt, std::vector<Bullet>& playerBullets) {
 }
 
 void Player::Draw() const {
-    // Flicker during invincibility frames
-    bool show = true;
-    if (invincibleTimer > 0.0f) {
-        show = ((int)(GetTime() * 12) % 2) == 0;
-    }
-    if (!show) return;
+    // ── Ground shadow — altitude indicator (Zaxxon style) ─────────────────────
+    float altRatio    = (pos.y - 0.5f) / 9.5f;           // 0 = ground, 1 = ceiling
+    float shadowR     = Lerp(1.5f, 0.4f, altRatio);
+    unsigned char sha = (unsigned char)Lerp(180.0f, 30.0f, altRatio);
+    DrawCircle3D({pos.x, 0.05f, pos.z}, shadowR,
+                 {1.0f, 0.0f, 0.0f}, 90.0f, {0, 0, 0, sha});
 
-    Color bodyCol = BLUE;
+    // ── Flicker during invincibility ──────────────────────────────────────────
+    if (invincibleTimer > 0.0f && ((int)(GetTime() * 12) % 2) == 0) return;
 
-    // Fuselage
-    DrawCube(pos, 1.4f, 0.35f, 2.2f, bodyCol);
-    DrawCubeWires(pos, 1.4f, 0.35f, 2.2f, DARKBLUE);
+    Color body = BLUE;
 
-    // Wings
-    Vector3 wingPos = {pos.x, pos.y, pos.z + 0.3f};
-    DrawCube(wingPos, 4.2f, 0.18f, 1.0f, bodyCol);
-    DrawCubeWires(wingPos, 4.2f, 0.18f, 1.0f, DARKBLUE);
+    // Fuselage (elongated along +X = travel direction)
+    DrawCube(pos, 2.2f, 0.35f, 1.4f, body);
+    DrawCubeWires(pos, 2.2f, 0.35f, 1.4f, DARKBLUE);
 
-    // Tail fins
-    Vector3 tailPos = {pos.x, pos.y + 0.25f, pos.z + 0.9f};
-    DrawCube(tailPos, 1.6f, 0.5f, 0.4f, bodyCol);
-    DrawCubeWires(tailPos, 1.6f, 0.5f, 0.4f, DARKBLUE);
+    // Wings (span Z)
+    Vector3 wingPos = {pos.x - 0.2f, pos.y, pos.z};
+    DrawCube(wingPos, 0.8f, 0.18f, 4.2f, body);
+    DrawCubeWires(wingPos, 0.8f, 0.18f, 4.2f, DARKBLUE);
+
+    // Tail fin
+    Vector3 tailPos = {pos.x - 0.8f, pos.y + 0.3f, pos.z};
+    DrawCube(tailPos, 0.6f, 0.6f, 0.2f, body);
 
     // Cockpit
-    Vector3 cockpitPos = {pos.x, pos.y + 0.28f, pos.z - 0.4f};
-    DrawSphere(cockpitPos, 0.38f, SKYBLUE);
+    DrawSphere({pos.x + 0.6f, pos.y + 0.28f, pos.z}, 0.38f, SKYBLUE);
 
-    // Engine glow
-    Vector3 enginePos = {pos.x, pos.y, pos.z + 1.1f};
-    DrawSphere(enginePos, 0.25f, (Color){255, 140, 0, 200});
+    // Engine exhaust glow
+    DrawSphere({pos.x - 1.1f, pos.y, pos.z}, 0.28f, (Color){255, 140, 0, 220});
 }
 
 void Player::TakeDamage(int dmg) {

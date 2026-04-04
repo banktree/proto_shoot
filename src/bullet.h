@@ -5,18 +5,18 @@
 enum class BulletOwner { Player, Enemy };
 
 struct Bullet {
-    Vector3    pos;
-    Vector3    vel;
-    float      radius;
-    int        damage;
+    Vector3     pos;
+    Vector3     vel;
+    float       radius;
+    int         damage;
     BulletOwner owner;
-    bool       active;
-    float      lifetime;
-    Color      color;
+    bool        active;
+    float       lifetime;
+    Color       color;
 
-    Bullet(Vector3 p, Vector3 v, float r, int dmg, BulletOwner o, Color c)
+    Bullet(Vector3 p, Vector3 v, float r, int dmg, BulletOwner o, Color c, float life = 3.0f)
         : pos(p), vel(v), radius(r), damage(dmg), owner(o),
-          active(true), lifetime(4.0f), color(c)
+          active(true), lifetime(life), color(c)
     {}
 
     void Update(float dt) {

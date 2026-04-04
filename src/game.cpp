@@ -9,7 +9,7 @@
 
 Game::Game()
     : score(0), wave(1),
-      scrollSpeed(12.0f),
+      scrollSpeed(SCROLL_DEFAULT),
       worldGenX(0.0f),
       enemySpawnTimer(2.0f), enemySpawnInterval(3.0f),
       gameOver(false)
@@ -50,7 +50,7 @@ void Game::Reset() {
     bombEffects.clear();
     score       = 0;
     wave        = 1;
-    scrollSpeed = 12.0f;
+    scrollSpeed = SCROLL_DEFAULT;
     worldGenX   = player.pos.x;
     enemySpawnTimer    = 2.0f;
     enemySpawnInterval = 3.0f;
@@ -167,8 +167,13 @@ void Game::Update(float dt) {
     bombEffects.erase(std::remove_if(bombEffects.begin(), bombEffects.end(),
         [](const BombEffect& bf) { return !bf.active; }), bombEffects.end());
 
-    // Wave progression: speed up every 30 seconds of survival
-    scrollSpeed = 12.0f + wave * 1.5f;
+    // Speed control: [ = slower, ] = faster
+    if (IsKeyPressed(KEY_LEFT_BRACKET))
+        scrollSpeed = std::max(SCROLL_MIN, scrollSpeed - SCROLL_STEP);
+    if (IsKeyPressed(KEY_RIGHT_BRACKET))
+        scrollSpeed = std::min(SCROLL_MAX, scrollSpeed + SCROLL_STEP);
+
+    // Wave: score threshold only (don't override player speed setting)
     wave = 1 + (int)(score / 2000);
 
     if (!player.IsAlive()) gameOver = true;
@@ -315,9 +320,12 @@ void Game::CheckCollisions() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void Game::UpdateCamera() {
-    // Equal offset on all axes → classic isometric elevation (~35.26°)
+    // Camera behind (-X) and above/right (+Z) the player so that:
+    //   +X world (forward / scroll direction) → upper-right on screen  (Zaxxon)
+    //   +Z world (right strafe)               → lower-right on screen
+    //   +Y world (altitude)                   → up on screen
     const float D = 32.0f;
-    camera.position   = {player.pos.x + D, D, player.pos.z + D};
+    camera.position   = {player.pos.x - D, D, player.pos.z + D};
     camera.target     = {player.pos.x, 0.0f, player.pos.z};
     camera.up         = {0.0f, 1.0f, 0.0f};
     camera.fovy       = 28.0f;
@@ -445,19 +453,46 @@ void Game::DrawHUD() {
     }
 
     // ── Altitude meter (vertical bar, right side — Zaxxon style) ─────────────
-    const int altX = SCREEN_W - 42;
+    //   Altitude range: MIN_ALT(0.5) → MAX_ALT(10.0)
+    const float ALT_MIN = 0.5f, ALT_MAX = 10.0f;
+    const int altX = SCREEN_W - 52;
     const int altY = 20;
     const int altH = 200;
-    DrawRectangle(altX, altY, 20, altH, DARKGRAY);
-    float altRatio = (player.pos.y - 0.5f) / 9.5f;
-    int   altFill  = (int)(altH * Clamp(altRatio, 0.0f, 1.0f));
-    DrawRectangle(altX, altY + altH - altFill, 20, altFill, SKYBLUE);
-    DrawRectangleLines(altX, altY, 20, altH, WHITE);
-    DrawText("ALT", altX - 2, altY + altH + 4, 14, SKYBLUE);
+    const int altW = 20;
 
-    // ── Score / Wave ──────────────────────────────────────────────────────────
-    DrawText(TextFormat("SCORE %06d", score), SCREEN_W - 230, 20, 20, WHITE);
-    DrawText(TextFormat("WAVE  %d",   wave),  SCREEN_W - 230, 46, 18, ORANGE);
+    // Background
+    DrawRectangle(altX, altY, altW, altH, DARKGRAY);
+
+    // Fill
+    float altRatio = (player.pos.y - ALT_MIN) / (ALT_MAX - ALT_MIN);
+    int   altFill  = (int)(altH * Clamp(altRatio, 0.0f, 1.0f));
+    DrawRectangle(altX, altY + altH - altFill, altW, altFill, SKYBLUE);
+
+    // Tick marks every 1 unit of altitude, label every 2
+    for (int a = 1; a <= (int)ALT_MAX; ++a) {
+        float r   = (a - ALT_MIN) / (ALT_MAX - ALT_MIN);
+        int   ty  = altY + altH - (int)(altH * r);
+        bool  major = (a % 2 == 0);
+        int   tickLen = major ? 7 : 4;
+        Color tickCol = major ? WHITE : LIGHTGRAY;
+        DrawLine(altX - tickLen, ty, altX, ty, tickCol);
+        DrawLine(altX + altW, ty, altX + altW + tickLen, ty, tickCol);
+        if (major)
+            DrawText(TextFormat("%d", a), altX + altW + 10, ty - 7, 12, LIGHTGRAY);
+    }
+
+    // Border
+    DrawRectangleLines(altX, altY, altW, altH, WHITE);
+
+    // Current altitude text
+    DrawText("ALT", altX + 1, altY + altH + 4, 13, SKYBLUE);
+    DrawText(TextFormat("%.1f", player.pos.y), altX - 8, altY + altH + 18, 12, SKYBLUE);
+
+    // ── Score / Wave / Speed ──────────────────────────────────────────────────
+    DrawText(TextFormat("SCORE %06d", score),                   SCREEN_W - 240, 20, 20, WHITE);
+    DrawText(TextFormat("WAVE  %d",   wave),                    SCREEN_W - 240, 46, 18, ORANGE);
+    DrawText(TextFormat("SPD   %.1f", scrollSpeed),             SCREEN_W - 240, 70, 16, LIGHTGRAY);
+    DrawText("[  slower    faster  ]", SCREEN_W - 240, 90, 13, DARKGRAY);
 
     // ── Enemy HP bars (world → screen) ───────────────────────────────────────
     for (const auto& e : enemies) {
@@ -492,7 +527,7 @@ void Game::DrawHUD() {
     }
 
     // ── Controls ──────────────────────────────────────────────────────────────
-    DrawText("Arrows: Move/Alt   Z: Shot   X: Spread   C: Bomb", 20, SCREEN_H - 26, 15, LIGHTGRAY);
+    DrawText("Arrows: Move/Alt   Z: Shot   X: Spread   C: Bomb   [ ]: Speed", 20, SCREEN_H - 26, 15, LIGHTGRAY);
 
     // ── Game Over ─────────────────────────────────────────────────────────────
     if (gameOver) {

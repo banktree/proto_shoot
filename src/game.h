@@ -60,8 +60,8 @@ private:
     std::vector<Building>   buildings;
     std::vector<BombEffect> bombEffects;
 
-    float scrollSpeed;   // world units/sec
-    float worldGenX;     // furthest X we have generated terrain to
+    float scrollSpeed;      // world units/sec (runtime adjustable)
+    float worldGenX;        // furthest X we have generated terrain to
 
     int   score;
     int   wave;
@@ -72,14 +72,21 @@ private:
     std::mt19937 rng;
 
     // ── Tunable constants ─────────────────────────────────────────────────────
-    static constexpr float ARENA_Z_HALF    = 16.0f;  // half-width in Z
-    static constexpr float WALL_HEIGHT     = 12.0f;  // total wall height
+    static constexpr float ARENA_Z_HALF    = 16.0f;
+    static constexpr float WALL_HEIGHT     = 12.0f;
     static constexpr float WALL_THICKNESS  =  1.5f;
-    static constexpr float SECTION_LEN     = 12.0f;  // terrain chunk spacing
-    static constexpr float GEN_LOOKAHEAD   = 90.0f;  // generate this far ahead
-    static constexpr float DESPAWN_BEHIND  = 35.0f;  // discard this far behind
-    static constexpr float ENEMY_SPAWN_X   = 55.0f;  // enemies spawn this far ahead
+    static constexpr float SECTION_LEN     = 12.0f;
+    static constexpr float GEN_LOOKAHEAD   = 70.0f;
+    static constexpr float DESPAWN_BEHIND  = 35.0f;
+    static constexpr float ENEMY_SPAWN_X   = 30.0f;  // visible at new camera angle
     static constexpr float BOMB_RADIUS     = 25.0f;
+
+    // Scroll speed limits ([ / ] keys)
+    static constexpr float SCROLL_DEFAULT  =  7.0f;
+    static constexpr float SCROLL_MIN      =  3.0f;
+    static constexpr float SCROLL_MAX      = 22.0f;
+    static constexpr float SCROLL_STEP     =  1.5f;
+
     static constexpr int   SCREEN_W        = 1280;
     static constexpr int   SCREEN_H        = 720;
 };

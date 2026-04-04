@@ -68,9 +68,9 @@ void Enemy::Update(float dt, Vector3 playerPos, std::vector<Bullet>& enemyBullet
             break;
     }
 
-    // ── Shooting ──────────────────────────────────────────────────────────────
+    // ── Shooting — only while ahead of the player ────────────────────────────
     shootTimer -= dt;
-    if (shootTimer <= 0.0f) {
+    if (shootTimer <= 0.0f && pos.x > playerPos.x) {
         shootTimer = shootInterval;
 
         Vector3 dir = Vector3Subtract(playerPos, pos);

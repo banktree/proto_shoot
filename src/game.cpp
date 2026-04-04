@@ -167,13 +167,10 @@ void Game::Update(float dt) {
     bombEffects.erase(std::remove_if(bombEffects.begin(), bombEffects.end(),
         [](const BombEffect& bf) { return !bf.active; }), bombEffects.end());
 
-    // Speed control: [ = slower, ] = faster
-    if (IsKeyPressed(KEY_LEFT_BRACKET))
-        scrollSpeed = std::max(SCROLL_MIN, scrollSpeed - SCROLL_STEP);
-    if (IsKeyPressed(KEY_RIGHT_BRACKET))
-        scrollSpeed = std::min(SCROLL_MAX, scrollSpeed + SCROLL_STEP);
+    // Spacebar: hold to boost, release to return to default
+    scrollSpeed = IsKeyDown(KEY_SPACE) ? SCROLL_BOOST : SCROLL_DEFAULT;
 
-    // Wave: score threshold only (don't override player speed setting)
+    // Wave: score threshold
     wave = 1 + (int)(score / 2000);
 
     if (!player.IsAlive()) gameOver = true;
@@ -324,11 +321,12 @@ void Game::UpdateCamera() {
     //   +X world (forward / scroll direction) → upper-right on screen  (Zaxxon)
     //   +Z world (right strafe)               → lower-right on screen
     //   +Y world (altitude)                   → up on screen
-    const float D = 32.0f;
+    const float D          = 32.0f;
+    const float LOOK_AHEAD = 12.0f;   // camera looks ahead → player appears lower-left
     camera.position   = {player.pos.x - D, D, player.pos.z + D};
-    camera.target     = {player.pos.x, 0.0f, player.pos.z};
+    camera.target     = {player.pos.x + LOOK_AHEAD, 0.0f, player.pos.z};
     camera.up         = {0.0f, 1.0f, 0.0f};
-    camera.fovy       = 28.0f;
+    camera.fovy       = 30.0f;        // slightly wider to compensate for look-ahead
     camera.projection = CAMERA_ORTHOGRAPHIC;
 }
 
@@ -435,7 +433,7 @@ void Game::DrawBombEffects() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void Game::DrawHUD() {
-    // ── HP bar ────────────────────────────────────────────────────────────────
+    // ── HP bar (top-left) ─────────────────────────────────────────────────────
     DrawRectangle(20, 20, 200, 22, DARKGRAY);
     int fw = (int)(200 * (float)player.hp / player.maxHp);
     Color hpCol = (player.hp > player.maxHp / 2) ? GREEN
@@ -452,84 +450,116 @@ void Game::DrawHUD() {
         DrawRectangleLines(60 + i * 22, 48, 18, 18, WHITE);
     }
 
-    // ── Altitude meter (vertical bar, right side — Zaxxon style) ─────────────
-    //   Altitude range: MIN_ALT(0.5) → MAX_ALT(10.0)
-    const float ALT_MIN = 0.5f, ALT_MAX = 10.0f;
-    const int altX = SCREEN_W - 52;
-    const int altY = 20;
-    const int altH = 200;
-    const int altW = 20;
-
-    // Background
-    DrawRectangle(altX, altY, altW, altH, DARKGRAY);
-
-    // Fill
-    float altRatio = (player.pos.y - ALT_MIN) / (ALT_MAX - ALT_MIN);
-    int   altFill  = (int)(altH * Clamp(altRatio, 0.0f, 1.0f));
-    DrawRectangle(altX, altY + altH - altFill, altW, altFill, SKYBLUE);
-
-    // Tick marks every 1 unit of altitude, label every 2
-    for (int a = 1; a <= (int)ALT_MAX; ++a) {
-        float r   = (a - ALT_MIN) / (ALT_MAX - ALT_MIN);
-        int   ty  = altY + altH - (int)(altH * r);
-        bool  major = (a % 2 == 0);
-        int   tickLen = major ? 7 : 4;
-        Color tickCol = major ? WHITE : LIGHTGRAY;
-        DrawLine(altX - tickLen, ty, altX, ty, tickCol);
-        DrawLine(altX + altW, ty, altX + altW + tickLen, ty, tickCol);
-        if (major)
-            DrawText(TextFormat("%d", a), altX + altW + 10, ty - 7, 12, LIGHTGRAY);
-    }
-
-    // Border
-    DrawRectangleLines(altX, altY, altW, altH, WHITE);
-
-    // Current altitude text
-    DrawText("ALT", altX + 1, altY + altH + 4, 13, SKYBLUE);
-    DrawText(TextFormat("%.1f", player.pos.y), altX - 8, altY + altH + 18, 12, SKYBLUE);
-
-    // ── Score / Wave / Speed ──────────────────────────────────────────────────
-    DrawText(TextFormat("SCORE %06d", score),                   SCREEN_W - 240, 20, 20, WHITE);
-    DrawText(TextFormat("WAVE  %d",   wave),                    SCREEN_W - 240, 46, 18, ORANGE);
-    DrawText(TextFormat("SPD   %.1f", scrollSpeed),             SCREEN_W - 240, 70, 16, LIGHTGRAY);
-    DrawText("[  slower    faster  ]", SCREEN_W - 240, 90, 13, DARKGRAY);
+    // ── Score / Wave (top-right) ──────────────────────────────────────────────
+    bool boosting = IsKeyDown(KEY_SPACE);
+    DrawText(TextFormat("SCORE %06d", score), SCREEN_W - 200, 20, 20, WHITE);
+    DrawText(TextFormat("WAVE  %d",   wave),  SCREEN_W - 200, 46, 18, ORANGE);
+    DrawText(boosting ? "BOOST!" : "NORMAL",  SCREEN_W - 200, 70, 16,
+             boosting ? YELLOW : LIGHTGRAY);
 
     // ── Enemy HP bars (world → screen) ───────────────────────────────────────
     for (const auto& e : enemies) {
         if (!e.IsAlive()) continue;
         Vector2 sp = GetWorldToScreen({e.pos.x, e.pos.y + 2.5f, e.pos.z}, camera);
         if (sp.x < 0 || sp.x > SCREEN_W || sp.y < 0 || sp.y > SCREEN_H) continue;
-        int bw = 36;
-        int bx = (int)sp.x - bw / 2;
-        int by = (int)sp.y - 6;
+        int bw = 36, bx = (int)sp.x - bw / 2, by = (int)sp.y - 6;
         DrawRectangle(bx, by, bw, 5, DARKGRAY);
         DrawRectangle(bx, by, (int)(bw * (float)e.hp / e.maxHp), 5, LIME);
     }
 
-    // ── Next-wall altitude indicator (HUD hint) ───────────────────────────────
+    // ══ Center dual gauge: [WALL GAP] | [ALTITUDE] ═══════════════════════════
+    //   Both bars share the same altitude scale: ALT_MIN(0.5) → ALT_MAX(10.0)
+    const float ALT_MIN  = 0.5f, ALT_MAX = 10.0f;
+    const float altRange = ALT_MAX - ALT_MIN;
+    const int   GH = 200;   // gauge height in pixels
+    const int   GW = 22;    // gauge width
+    const int   GAP = 10;   // gap between the two bars
+    // Center the pair horizontally
+    const int   pairW  = GW * 2 + GAP;
+    const int   leftX  = SCREEN_W / 2 - pairW / 2;       // WALL gauge
+    const int   rightX = leftX + GW + GAP;                // ALT gauge
+    const int   gaugeY = SCREEN_H - GH - 44;
+
+    // ── Find nearest upcoming wall ────────────────────────────────────────────
+    const Wall* nextWall = nullptr;
+    float       wallDist = 1e9f;
     for (const auto& w : walls) {
-        float distToWall = w.x - player.pos.x;
-        if (distToWall > 0.0f && distToWall < 40.0f && !w.passed) {
-            int barX = SCREEN_W / 2 - 60;
-            int barY = SCREEN_H - 60;
-            DrawText("WALL", barX, barY - 16, 16, YELLOW);
-            // mini altitude bar showing gap range
-            DrawRectangle(barX, barY, 120, 16, DARKGRAY);
-            int gapY1 = barY + 16 - (int)(16 * w.gapTop   / WALL_HEIGHT);
-            int gapY2 = barY + 16 - (int)(16 * w.gapBottom / WALL_HEIGHT);
-            DrawRectangle(barX, gapY1, 120, gapY2 - gapY1, GREEN);
-            // player altitude indicator on the bar
-            int playerBar = barY + 16 - (int)(16 * player.pos.y / WALL_HEIGHT);
-            DrawRectangle(barX - 4, playerBar - 2, 128, 4, WHITE);
-            DrawRectangleLines(barX, barY, 120, 16, WHITE);
-            break;
-        }
+        float d = w.x - player.pos.x;
+        if (d > 0.0f && d < wallDist) { wallDist = d; nextWall = &w; }
     }
 
-    // ── Controls ──────────────────────────────────────────────────────────────
-    DrawText("Arrows: Move/Alt   Z: Shot   X: Spread   C: Bomb   [ ]: Speed", 20, SCREEN_H - 26, 15, LIGHTGRAY);
+    // ── LEFT bar: Wall gap gauge ──────────────────────────────────────────────
+    DrawRectangle(leftX, gaugeY, GW, GH, DARKGRAY);
 
-    // ── Game Over ─────────────────────────────────────────────────────────────
+    if (nextWall) {
+        // Danger (red) — bottom zone: ALT_MIN → gapBottom
+        float botRatio = Clamp((nextWall->gapBottom - ALT_MIN) / altRange, 0.0f, 1.0f);
+        int   botPx    = (int)(GH * botRatio);
+        if (botPx > 0)
+            DrawRectangle(leftX, gaugeY + GH - botPx, GW, botPx, RED);
+
+        // Safe (green) — gap zone: gapBottom → gapTop
+        float gapBotR = Clamp((nextWall->gapBottom - ALT_MIN) / altRange, 0.0f, 1.0f);
+        float gapTopR = Clamp((nextWall->gapTop    - ALT_MIN) / altRange, 0.0f, 1.0f);
+        int   gapY1   = gaugeY + GH - (int)(GH * gapTopR);
+        int   gapY2   = gaugeY + GH - (int)(GH * gapBotR);
+        if (gapY2 > gapY1)
+            DrawRectangle(leftX, gapY1, GW, gapY2 - gapY1, {0, 200, 0, 255});
+
+        // Danger (red) — top zone: gapTop → ALT_MAX
+        float topRatio = Clamp((ALT_MAX - nextWall->gapTop) / altRange, 0.0f, 1.0f);
+        int   topPx    = (int)(GH * topRatio);
+        if (topPx > 0)
+            DrawRectangle(leftX, gaugeY, GW, topPx, RED);
+
+        // Distance label — colour changes as wall approaches
+        Color dc = (wallDist < 12.0f) ? RED : (wallDist < 25.0f) ? YELLOW : WHITE;
+        DrawText(TextFormat("WALL"), leftX + 1, gaugeY - 28, 13, dc);
+        DrawText(TextFormat("%.0f", wallDist), leftX + 1, gaugeY - 14, 13, dc);
+    } else {
+        // No wall coming — all clear
+        DrawRectangle(leftX, gaugeY, GW, GH, {0, 90, 0, 255});
+        DrawText("CLEAR", leftX - 4, gaugeY - 14, 12, GREEN);
+    }
+
+    // Player altitude line on wall gauge
+    float playerR    = Clamp((player.pos.y - ALT_MIN) / altRange, 0.0f, 1.0f);
+    int   playerLineY = gaugeY + GH - (int)(GH * playerR);
+    DrawRectangle(leftX - 4, playerLineY - 2, GW + 8, 4, WHITE);
+
+    DrawRectangleLines(leftX, gaugeY, GW, GH, WHITE);
+    DrawText("WALL", leftX, gaugeY + GH + 5, 12, GRAY);
+
+    // ── RIGHT bar: Player altitude meter ─────────────────────────────────────
+    DrawRectangle(rightX, gaugeY, GW, GH, DARKGRAY);
+
+    // Altitude fill
+    int altFill = (int)(GH * Clamp(playerR, 0.0f, 1.0f));
+    DrawRectangle(rightX, gaugeY + GH - altFill, GW, altFill, SKYBLUE);
+
+    // Tick marks: every 1 unit minor, every 2 units major with label
+    for (int a = 1; a <= (int)ALT_MAX; ++a) {
+        float r      = (a - ALT_MIN) / altRange;
+        int   ty     = gaugeY + GH - (int)(GH * r);
+        bool  major  = (a % 2 == 0);
+        int   tLen   = major ? 7 : 4;
+        Color tCol   = major ? WHITE : LIGHTGRAY;
+        // ticks on BOTH sides
+        DrawLine(rightX - tLen, ty, rightX,       ty, tCol);
+        DrawLine(rightX + GW,   ty, rightX+GW+tLen, ty, tCol);
+        if (major)
+            DrawText(TextFormat("%d", a), rightX + GW + tLen + 2, ty - 7, 12, LIGHTGRAY);
+    }
+
+    DrawRectangleLines(rightX, gaugeY, GW, GH, WHITE);
+    DrawText("ALT",                         rightX + 1,  gaugeY + GH + 5,  12, SKYBLUE);
+    DrawText(TextFormat("%.1f", player.pos.y), rightX - 6, gaugeY + GH + 18, 12, SKYBLUE);
+
+    // ── Controls (bottom-left) ────────────────────────────────────────────────
+    DrawText("Arrows: Move/Alt   Z: Shot   X: Spread   C: Bomb   SPACE: Boost",
+             20, SCREEN_H - 26, 15, LIGHTGRAY);
+
+    // ── Game Over overlay ─────────────────────────────────────────────────────
     if (gameOver) {
         DrawRectangle(0, 0, SCREEN_W, SCREEN_H, {0, 0, 0, 160});
         const char* goText = "GAME OVER";

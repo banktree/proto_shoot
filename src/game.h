@@ -81,11 +81,9 @@ private:
     static constexpr float ENEMY_SPAWN_X   = 30.0f;  // visible at new camera angle
     static constexpr float BOMB_RADIUS     = 25.0f;
 
-    // Scroll speed limits ([ / ] keys)
+    // Scroll speed: default + spacebar boost
     static constexpr float SCROLL_DEFAULT  =  7.0f;
-    static constexpr float SCROLL_MIN      =  3.0f;
-    static constexpr float SCROLL_MAX      = 22.0f;
-    static constexpr float SCROLL_STEP     =  1.5f;
+    static constexpr float SCROLL_BOOST    = 18.0f;
 
     static constexpr int   SCREEN_W        = 1280;
     static constexpr int   SCREEN_H        = 720;

@@ -72,7 +72,7 @@ private:
     std::mt19937 rng;
 
     // ── Tunable constants ─────────────────────────────────────────────────────
-    static constexpr float ARENA_Z_HALF    = 16.0f;
+    static constexpr float ARENA_Z_HALF    = 12.0f;  // narrowed for portrait
     static constexpr float WALL_HEIGHT     = 12.0f;
     static constexpr float WALL_THICKNESS  =  1.5f;
     static constexpr float SECTION_LEN     = 12.0f;
@@ -85,6 +85,6 @@ private:
     static constexpr float SCROLL_DEFAULT  =  7.0f;
     static constexpr float SCROLL_BOOST    = 18.0f;
 
-    static constexpr int   SCREEN_W        = 1280;
-    static constexpr int   SCREEN_H        = 720;
+    static constexpr int   SCREEN_W        =  720;   // portrait
+    static constexpr int   SCREEN_H        = 1080;
 };

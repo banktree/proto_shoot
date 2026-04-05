@@ -322,11 +322,12 @@ void Game::UpdateCamera() {
     //   +Z world (right strafe)               → lower-right on screen
     //   +Y world (altitude)                   → up on screen
     const float D          = 32.0f;
-    const float LOOK_AHEAD = 12.0f;   // camera looks ahead → player appears lower-left
+    const float LOOK_AHEAD = 15.0f;   // more look-ahead for portrait (player lower-left)
     camera.position   = {player.pos.x - D, D, player.pos.z + D};
     camera.target     = {player.pos.x + LOOK_AHEAD, 0.0f, player.pos.z};
     camera.up         = {0.0f, 1.0f, 0.0f};
-    camera.fovy       = 30.0f;        // slightly wider to compensate for look-ahead
+    // Portrait 720x1080 (2:3): fovy sets world-unit height; width = fovy*(720/1080)=fovy*0.67
+    camera.fovy       = 36.0f;
     camera.projection = CAMERA_ORTHOGRAPHIC;
 }
 

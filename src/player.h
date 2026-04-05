@@ -27,7 +27,7 @@ private:
     static constexpr float STRAFE_SPEED    = 12.0f;
     static constexpr float MIN_ALT         =  0.5f;
     static constexpr float MAX_ALT         = 10.0f;
-    static constexpr float Z_BOUND         = 15.0f;
+    static constexpr float Z_BOUND         = 11.0f;  // portrait: narrower play field
     static constexpr float PRIMARY_RATE    =  0.15f;
     static constexpr float SECONDARY_RATE  =  0.35f;
     static constexpr float INVINCIBLE_TIME =  1.5f;

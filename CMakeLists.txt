@@ -28,6 +28,11 @@ add_executable(${PROJECT_NAME} ${SOURCES})
 target_link_libraries(${PROJECT_NAME} PRIVATE raylib)
 target_include_directories(${PROJECT_NAME} PRIVATE src)
 
+# MSVC: enforce UTF-8 source encoding (fixes C4819 on Korean Windows)
+if(MSVC)
+    target_compile_options(${PROJECT_NAME} PRIVATE /utf-8)
+endif()
+
 # Platform-specific linker flags
 if(APPLE)
     target_link_libraries(${PROJECT_NAME} PRIVATE

@@ -89,7 +89,7 @@ void Player::Draw() const {
     DrawSphere({pos.x + 0.6f, pos.y + 0.28f, pos.z}, 0.38f, SKYBLUE);
 
     // Engine exhaust glow
-    DrawSphere({pos.x - 1.1f, pos.y, pos.z}, 0.28f, (Color){255, 140, 0, 220});
+    DrawSphere({pos.x - 1.1f, pos.y, pos.z}, 0.28f, Color{255, 140, 0, 220});
 }
 
 void Player::TakeDamage(int dmg) {

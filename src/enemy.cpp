@@ -98,14 +98,14 @@ void Enemy::Draw() const {
             DrawCubeWires(pos, 2.0f, 0.4f, 1.5f, MAROON);
             // Wings spanning Z
             DrawCube({pos.x + 0.2f, pos.y, pos.z}, 0.8f, 0.2f, 3.6f, RED);
-            DrawSphere({pos.x + 0.7f, pos.y + 0.25f, pos.z}, 0.3f, (Color){200, 50, 50, 255});
+            DrawSphere({pos.x + 0.7f, pos.y + 0.25f, pos.z}, 0.3f, Color{200, 50, 50, 255});
             break;
 
         case EnemyType::Kamikaze:
             DrawCube(pos, 1.5f, 0.3f, 1.0f, ORANGE);
             DrawCubeWires(pos, 1.5f, 0.3f, 1.0f, RED);
             // Engine trail suggestion
-            DrawSphere({pos.x + 0.8f, pos.y, pos.z}, 0.25f, (Color){255, 100, 0, 180});
+            DrawSphere({pos.x + 0.8f, pos.y, pos.z}, 0.25f, Color{255, 100, 0, 180});
             break;
 
         case EnemyType::Turret: {

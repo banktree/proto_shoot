@@ -28,7 +28,7 @@ private:
     static constexpr float MIN_ALT         =  0.5f;
     static constexpr float MAX_ALT         = 10.0f;
     static constexpr float Z_BOUND         = 11.0f;  // portrait: narrower play field
-    static constexpr float PRIMARY_RATE    =  0.15f;
-    static constexpr float SECONDARY_RATE  =  0.35f;
+    static constexpr float PRIMARY_RATE    =  0.15f;  // missile fire rate
+    static constexpr float BOMB_RATE       =  1.4f;   // ground bomb cooldown
     static constexpr float INVINCIBLE_TIME =  1.5f;
 };

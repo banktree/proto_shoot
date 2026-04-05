@@ -42,14 +42,14 @@ void Player::Update(float dt, std::vector<Bullet>& playerBullets, float scrollSp
                                    0.2f, 1, BulletOwner::Player, YELLOW, 1.5f);
     }
 
-    // ── X: Spread shot — forward + Z fan ─────────────────────────────────────
+    // ── X: Ground bomb — parabolic arc, damages turrets on impact ────────────
     if (IsKeyDown(KEY_X) && secondaryTimer <= 0.0f) {
-        secondaryTimer = SECONDARY_RATE;
-        const float zVels[] = {-10.0f, 0.0f, 10.0f};
-        for (float zv : zVels) {
-            playerBullets.emplace_back(pos, Vector3{45.0f, 0.0f, zv},
-                                       0.22f, 1, BulletOwner::Player, ORANGE, 1.2f);
-        }
+        secondaryTimer = BOMB_RATE;
+        Vector3 bPos = {pos.x + 1.2f, pos.y, pos.z};
+        // Forward vel keeps bomb ahead while it arcs down; gravity = -10 pulls it to ground
+        playerBullets.emplace_back(bPos,
+            Vector3{scrollSpeed + 20.0f, 4.0f, 0.0f},
+            0.4f, 5, BulletOwner::Player, GOLD, 6.0f, -10.0f, true);
     }
 
     // ── C: Bomb ───────────────────────────────────────────────────────────────

@@ -8,18 +8,20 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 Game::Game()
-    : score(0), wave(1),
+    : score(0), currentStage(1),
       scrollSpeed(SCROLL_DEFAULT),
       worldGenX(0.0f),
-      enemySpawnTimer(2.0f), enemySpawnInterval(3.0f),
-      gameOver(false), bossAlive(false), lastBossWave(0)
+      stageStartX(0.0f), stageClearTimer(0.0f),
+      gameOver(false)
 {
     InitWindow(SCREEN_W, SCREEN_H, "Proto Shoot — Zaxxon Style");
     SetTargetFPS(60);
     rng.seed(42);
 
-    worldGenX = player.pos.x;
+    stageStartX = player.pos.x;
+    worldGenX   = player.pos.x;
     GenerateAhead();
+    BeginStage(currentStage);
     UpdateCamera();
 }
 
@@ -47,21 +49,111 @@ void Game::Reset() {
     enemyBullets.clear();
     buildings.clear();
     bombEffects.clear();
-    score       = 0;
-    wave        = 1;
-    scrollSpeed = SCROLL_DEFAULT;
-    worldGenX   = player.pos.x;
-    enemySpawnTimer    = 2.0f;
-    enemySpawnInterval = 3.0f;
-    gameOver     = false;
-    bossAlive    = false;
-    lastBossWave = 0;
+    spawnQueue.clear();
+    score           = 0;
+    currentStage    = 1;
+    scrollSpeed     = SCROLL_DEFAULT;
+    stageStartX     = player.pos.x;
+    worldGenX       = player.pos.x;
+    stageClearTimer = 0.0f;
+    gameOver        = false;
     GenerateAhead();
+    BeginStage(currentStage);
     UpdateCamera();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Procedural terrain generation (Zaxxon-style walls + buildings)
+//  Stage system
+// ─────────────────────────────────────────────────────────────────────────────
+
+void Game::BeginStage(int stage) {
+    spawnQueue.clear();
+
+    // Use a deterministic RNG seeded per stage so layouts are reproducible
+    std::mt19937 srng((unsigned)stage * 7919u + 13u);
+    std::uniform_real_distribution<float> zDist(-ARENA_Z_HALF + 2.5f, ARENA_Z_HALF - 2.5f);
+    std::uniform_real_distribution<float> yDist(2.0f, 7.5f);
+
+    float len = STAGE_LENGTH;
+
+    // ── Turrets (ground) — first 70% of stage ────────────────────────────────
+    int numTurrets = 3 + (stage - 1) * 2;
+    float tStep = len * 0.65f / numTurrets;
+    for (int i = 0; i < numTurrets; ++i) {
+        float relX = 40.0f + i * tStep;
+        spawnQueue.push_back({relX, EnemyType::Turret, zDist(srng), 0.6f, false});
+    }
+
+    // ── Fighters (air) — spread across first 75% ─────────────────────────────
+    int numFighters = 3 + (stage - 1) * 2;
+    float fStep = len * 0.70f / numFighters;
+    for (int i = 0; i < numFighters; ++i) {
+        float relX = 20.0f + i * fStep;
+        spawnQueue.push_back({relX, EnemyType::Fighter, zDist(srng), yDist(srng), false});
+    }
+
+    // ── Flankers from stage 2 ─────────────────────────────────────────────────
+    if (stage >= 2) {
+        int numFlankers = stage - 1;
+        float flStep = len * 0.55f / numFlankers;
+        for (int i = 0; i < numFlankers; ++i) {
+            float relX = 60.0f + i * flStep;
+            spawnQueue.push_back({relX, EnemyType::Flanker, zDist(srng), yDist(srng), false});
+        }
+    }
+
+    // ── Boss — near end of stage ──────────────────────────────────────────────
+    spawnQueue.push_back({len - 60.0f, EnemyType::Boss, 0.0f, 4.0f, false});
+
+    // Sort by relX so triggers fire in order
+    std::sort(spawnQueue.begin(), spawnQueue.end(),
+              [](const SpawnTrigger& a, const SpawnTrigger& b){
+                  return a.relX < b.relX;
+              });
+}
+
+void Game::UpdateStage(float dt) {
+    // During stage-clear countdown, just tick and then advance stage
+    if (stageClearTimer > 0.0f) {
+        stageClearTimer -= dt;
+        if (stageClearTimer <= 0.0f) {
+            stageClearTimer = 0.0f;
+            currentStage++;
+            stageStartX = player.pos.x;
+            BeginStage(currentStage);
+        }
+        return;
+    }
+
+    float progress = player.pos.x - stageStartX;
+
+    // Fire triggers as player advances through the stage
+    for (auto& trig : spawnQueue) {
+        if (!trig.fired && progress >= trig.relX) {
+            trig.fired = true;
+            float spawnX = player.pos.x + ENEMY_SPAWN_X;
+            enemies.emplace_back(Vector3{spawnX, trig.y, trig.z}, trig.type);
+        }
+    }
+
+    // Stage clear: all triggers fired AND no boss alive
+    bool allFired = true;
+    for (const auto& t : spawnQueue)
+        if (!t.fired) { allFired = false; break; }
+
+    bool bossAlive = false;
+    for (const auto& e : enemies)
+        if (e.type == EnemyType::Boss && e.IsAlive()) { bossAlive = true; break; }
+
+    if (allFired && !bossAlive && stageClearTimer == 0.0f) {
+        stageClearTimer = STAGE_CLEAR_DELAY;
+        enemies.clear();        // clear remaining non-boss enemies on stage clear
+        enemyBullets.clear();
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Procedural terrain generation (buildings only)
 // ─────────────────────────────────────────────────────────────────────────────
 
 void Game::GenerateAhead() {
@@ -74,13 +166,9 @@ void Game::GenerateAhead() {
 
     while (worldGenX < genTarget) {
         worldGenX += SECTION_LEN;
-
-        // ── Buildings (ground-level scenery) ──────────────────────────────────
         int n = numBldg(rng);
         for (int i = 0; i < n; ++i) {
-            float bw = bwDist(rng);
-            float bh = bhDist(rng);
-            float bd = bwDist(rng);
+            float bw = bwDist(rng), bh = bhDist(rng), bd = bwDist(rng);
             Building b;
             b.pos      = {worldGenX + zDist(rng) * 0.25f, bh * 0.5f, zDist(rng)};
             b.halfSize = {bw * 0.5f, bh * 0.5f, bd * 0.5f};
@@ -91,10 +179,10 @@ void Game::GenerateAhead() {
         }
     }
 
-    // ── Cleanup old buildings behind the player ───────────────────────────────
     float cutX = player.pos.x - DESPAWN_BEHIND;
     buildings.erase(std::remove_if(buildings.begin(), buildings.end(),
-        [cutX](const Building& b) { return b.pos.x + b.halfSize.x < cutX; }), buildings.end());
+        [cutX](const Building& b){ return b.pos.x + b.halfSize.x < cutX; }),
+        buildings.end());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -103,22 +191,14 @@ void Game::GenerateAhead() {
 
 void Game::Update(float dt) {
     player.Update(dt, playerBullets, scrollSpeed);
-
     if (player.usedBomb) ApplyBomb();
 
     GenerateAhead();
-
-    // Enemy spawning
-    enemySpawnTimer -= dt;
-    if (enemySpawnTimer <= 0.0f) {
-        SpawnEnemy();
-        enemySpawnTimer = enemySpawnInterval;
-    }
+    UpdateStage(dt);
 
     // Update enemies
-    for (auto& e : enemies) {
+    for (auto& e : enemies)
         e.Update(dt, player.pos, enemyBullets);
-    }
 
     // Update bullets
     for (auto& b : playerBullets) b.Update(dt);
@@ -134,34 +214,23 @@ void Game::Update(float dt) {
 
     CheckCollisions();
 
-    // Score for enemies killed THIS frame
-    for (const auto& e : enemies) {
+    // Score dead enemies
+    for (const auto& e : enemies)
         if (!e.IsAlive()) score += e.scoreValue;
-    }
 
-    // Remove dead enemies + enemies that flew past the player
     enemies.erase(std::remove_if(enemies.begin(), enemies.end(),
-        [&](const Enemy& e) {
+        [&](const Enemy& e){
             return !e.IsAlive() || (e.pos.x < player.pos.x - DESPAWN_BEHIND);
         }), enemies.end());
 
-    // Track whether a boss is currently alive
-    bossAlive = false;
-    for (const auto& e : enemies)
-        if (e.type == EnemyType::Boss && e.IsAlive()) { bossAlive = true; break; }
-
     playerBullets.erase(std::remove_if(playerBullets.begin(), playerBullets.end(),
-        [](const Bullet& b) { return !b.active; }), playerBullets.end());
+        [](const Bullet& b){ return !b.active; }), playerBullets.end());
     enemyBullets.erase(std::remove_if(enemyBullets.begin(), enemyBullets.end(),
-        [](const Bullet& b) { return !b.active; }), enemyBullets.end());
+        [](const Bullet& b){ return !b.active; }), enemyBullets.end());
     bombEffects.erase(std::remove_if(bombEffects.begin(), bombEffects.end(),
-        [](const BombEffect& bf) { return !bf.active; }), bombEffects.end());
+        [](const BombEffect& bf){ return !bf.active; }), bombEffects.end());
 
-    // Spacebar: hold to boost, release to return to default
     scrollSpeed = IsKeyDown(KEY_SPACE) ? SCROLL_BOOST : SCROLL_DEFAULT;
-
-    // Wave: score threshold
-    wave = 1 + (int)(score / 300);   // wave 2 at 300pts (~3 kills), 3 at 600, etc.
 
     if (!player.IsAlive()) gameOver = true;
 
@@ -169,56 +238,18 @@ void Game::Update(float dt) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Enemy spawning
-// ─────────────────────────────────────────────────────────────────────────────
-
-void Game::SpawnEnemy() {
-    std::uniform_real_distribution<float> zDist(-ARENA_Z_HALF + 2.0f, ARENA_Z_HALF - 2.0f);
-    std::uniform_real_distribution<float> yDist(2.0f, 7.0f);
-    std::uniform_real_distribution<float> typeDist(0.0f, 1.0f);
-
-    float spawnX = player.pos.x + ENEMY_SPAWN_X;
-
-    // Spawn a boss every 3rd wave (wave 3, 6, 9...) if none is alive
-    if (wave >= 3 && wave % 3 == 0 && wave != lastBossWave && !bossAlive) {
-        lastBossWave = wave;
-        bossAlive    = true;
-        enemies.emplace_back(Vector3{spawnX, 4.0f, 0.0f}, EnemyType::Boss);
-        return;
-    }
-
-    float spawnZ = zDist(rng);
-    float r      = typeDist(rng);
-
-    EnemyType type;
-    if      (wave >= 3 && r < 0.25f) type = EnemyType::Flanker;
-    else if (wave >= 2 && r < 0.45f) type = EnemyType::Turret;
-    else                              type = EnemyType::Fighter;
-
-    float spawnY = (type == EnemyType::Turret) ? 0.5f : yDist(rng);
-
-    enemies.emplace_back(Vector3{spawnX, spawnY, spawnZ}, type);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Bomb
+//  C-bomb (screen-clearing)
 // ─────────────────────────────────────────────────────────────────────────────
 
 void Game::ApplyBomb() {
-    for (auto& e : enemies) {
-        if (Vector3Distance(e.pos, player.pos) < BOMB_RADIUS)
-            e.TakeDamage(999);
-    }
-    for (auto& b : enemyBullets) {
-        if (Vector3Distance(b.pos, player.pos) < BOMB_RADIUS)
-            b.active = false;
-    }
+    for (auto& e : enemies)
+        if (Vector3Distance(e.pos, player.pos) < BOMB_RADIUS) e.TakeDamage(999);
+    for (auto& b : enemyBullets)
+        if (Vector3Distance(b.pos, player.pos) < BOMB_RADIUS) b.active = false;
+
     BombEffect bf;
-    bf.pos       = player.pos;
-    bf.radius    = 0.0f;
-    bf.maxRadius = BOMB_RADIUS;
-    bf.duration  = bf.timer = 0.6f;
-    bf.active    = true;
+    bf.pos = player.pos; bf.radius = 0.0f; bf.maxRadius = BOMB_RADIUS;
+    bf.duration = bf.timer = 0.6f; bf.active = true;
     bombEffects.push_back(bf);
 }
 
@@ -227,9 +258,30 @@ void Game::ApplyBomb() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void Game::CheckCollisions() {
-    // ── Player bullets vs enemies ─────────────────────────────────────────────
+    // ── Ground bomb hits ground → splash damage to nearby enemies ────────────
     for (auto& b : playerBullets) {
-        if (!b.active) continue;
+        if (!b.active || !b.isBomb) continue;
+        if (b.pos.y <= 0.15f) {
+            b.active = false;
+            // Area damage (flat 2-D distance so altitude doesn't shield turrets)
+            for (auto& e : enemies) {
+                if (!e.IsAlive()) continue;
+                float dx = b.pos.x - e.pos.x, dz = b.pos.z - e.pos.z;
+                if (sqrtf(dx*dx + dz*dz) < BOMB_SPLASH)
+                    e.TakeDamage(b.damage);
+            }
+            // Explosion visual
+            BombEffect bf;
+            bf.pos = {b.pos.x, 0.1f, b.pos.z};
+            bf.radius = 0.0f; bf.maxRadius = BOMB_SPLASH;
+            bf.duration = bf.timer = 0.55f; bf.active = true;
+            bombEffects.push_back(bf);
+        }
+    }
+
+    // ── Player missiles vs enemies ────────────────────────────────────────────
+    for (auto& b : playerBullets) {
+        if (!b.active || b.isBomb) continue;
         for (auto& e : enemies) {
             if (!e.IsAlive()) continue;
             if (Vector3Distance(b.pos, e.pos) < e.collisionRadius + b.radius) {
@@ -252,8 +304,7 @@ void Game::CheckCollisions() {
     // ── Enemy body vs player (ram) ────────────────────────────────────────────
     for (auto& e : enemies) {
         if (!e.IsAlive()) continue;
-        float minDist = e.collisionRadius + 0.8f;
-        if (Vector3Distance(e.pos, player.pos) < minDist)
+        if (Vector3Distance(e.pos, player.pos) < e.collisionRadius + 0.8f)
             player.TakeDamage(1);
     }
 
@@ -266,39 +317,19 @@ void Game::CheckCollisions() {
         if (CheckCollisionBoxSphere(bb, player.pos, 0.8f))
             player.TakeDamage(1);
     }
-
-    // ── Player bullets vs buildings ───────────────────────────────────────────
-    for (auto& b : playerBullets) {
-        if (!b.active) continue;
-        for (const auto& bld : buildings) {
-            BoundingBox bb = {
-                {bld.pos.x - bld.halfSize.x, bld.pos.y - bld.halfSize.y, bld.pos.z - bld.halfSize.z},
-                {bld.pos.x + bld.halfSize.x, bld.pos.y + bld.halfSize.y, bld.pos.z + bld.halfSize.z}
-            };
-            if (CheckCollisionBoxSphere(bb, b.pos, b.radius)) {
-                b.active = false;
-                break;
-            }
-        }
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Camera — isometric, follows player X & Z (Zaxxon angle)
+//  Camera — isometric, Z fixed (Zaxxon angle)
 // ─────────────────────────────────────────────────────────────────────────────
 
 void Game::UpdateCamera() {
-    // Camera behind (-X) and above/right (+Z) the player so that:
-    //   +X world (forward / scroll direction) → upper-right on screen  (Zaxxon)
-    //   +Z world (right strafe)               → lower-right on screen
-    //   +Y world (altitude)                   → up on screen
     const float D          = 32.0f;
-    const float LOOK_AHEAD = 15.0f;   // more look-ahead for portrait (player lower-left)
-    // Z is fixed — camera does NOT follow player's left/right movement
+    const float LOOK_AHEAD = 15.0f;
+    // Z is fixed — camera does NOT follow player's left/right strafe
     camera.position   = {player.pos.x - D, D, D};
     camera.target     = {player.pos.x + LOOK_AHEAD, 0.0f, 0.0f};
     camera.up         = {0.0f, 1.0f, 0.0f};
-    // Portrait 720x1080 (2:3): fovy sets world-unit height; width = fovy*(720/1080)=fovy*0.67
     camera.fovy       = 36.0f;
     camera.projection = CAMERA_ORTHOGRAPHIC;
 }
@@ -326,12 +357,10 @@ void Game::Draw() {
 }
 
 void Game::DrawTerrain() {
-    // Scrolling ground plane (wide enough to fill the view)
     const float GW = 160.0f;
     DrawPlane({player.pos.x, 0.0f, 0.0f},
               {GW, (ARENA_Z_HALF + 6.0f) * 2.0f}, {28, 55, 28, 255});
 
-    // Grid lines
     Color gc = {42, 72, 42, 255};
     float x0 = floorf((player.pos.x - 70.0f) / 5.0f) * 5.0f;
     float x1 = player.pos.x + 70.0f;
@@ -340,7 +369,6 @@ void Game::DrawTerrain() {
     for (float z = -ARENA_Z_HALF; z <= ARENA_Z_HALF; z += 5.0f)
         DrawLine3D({x0, 0.02f, z}, {x1, 0.02f, z}, gc);
 
-    // Side boundary lines
     Color bc = {80, 80, 200, 180};
     DrawLine3D({x0, 0.05f, -ARENA_Z_HALF}, {x1, 0.05f, -ARENA_Z_HALF}, bc);
     DrawLine3D({x0, 0.05f,  ARENA_Z_HALF}, {x1, 0.05f,  ARENA_Z_HALF}, bc);
@@ -348,9 +376,7 @@ void Game::DrawTerrain() {
 
 void Game::DrawBuildings() {
     for (const auto& b : buildings) {
-        float w = b.halfSize.x * 2.0f;
-        float h = b.halfSize.y * 2.0f;
-        float d = b.halfSize.z * 2.0f;
+        float w = b.halfSize.x * 2.0f, h = b.halfSize.y * 2.0f, d = b.halfSize.z * 2.0f;
         DrawCube(b.pos, w, h, d, b.color);
         Color wc = {(unsigned char)(b.color.r / 2),
                     (unsigned char)(b.color.g / 2),
@@ -395,12 +421,18 @@ void Game::DrawHUD() {
         DrawRectangleLines(60 + i * 22, 48, 18, 18, WHITE);
     }
 
-    // ── Score / Wave (top-right) ──────────────────────────────────────────────
+    // ── Score / Stage (top-right) ─────────────────────────────────────────────
     bool boosting = IsKeyDown(KEY_SPACE);
-    DrawText(TextFormat("SCORE %06d", score), SCREEN_W - 200, 20, 20, WHITE);
-    DrawText(TextFormat("WAVE  %d",   wave),  SCREEN_W - 200, 46, 18, ORANGE);
-    DrawText(boosting ? "BOOST!" : "NORMAL",  SCREEN_W - 200, 70, 16,
+    DrawText(TextFormat("SCORE %06d", score),    SCREEN_W - 210, 20, 20, WHITE);
+    DrawText(TextFormat("STAGE  %d", currentStage), SCREEN_W - 210, 46, 18, ORANGE);
+    DrawText(boosting ? "BOOST!" : "NORMAL",         SCREEN_W - 210, 70, 16,
              boosting ? YELLOW : LIGHTGRAY);
+
+    // ── Stage progress bar (top-right, below stage label) ────────────────────
+    float stageProgress = Clamp((player.pos.x - stageStartX) / STAGE_LENGTH, 0.0f, 1.0f);
+    DrawRectangle(SCREEN_W - 210, 90, 190, 10, DARKGRAY);
+    DrawRectangle(SCREEN_W - 210, 90, (int)(190 * stageProgress), 10, ORANGE);
+    DrawRectangleLines(SCREEN_W - 210, 90, 190, 10, GRAY);
 
     // ── Enemy HP bars (world → screen) ───────────────────────────────────────
     for (const auto& e : enemies) {
@@ -415,19 +447,14 @@ void Game::DrawHUD() {
     // ══ Center dual gauge: [BOSS HP] | [ALTITUDE] ════════════════════════════
     const float ALT_MIN  = 0.5f, ALT_MAX = 10.0f;
     const float altRange = ALT_MAX - ALT_MIN;
-    const int   GH = 200;   // gauge height in pixels
-    const int   GW = 22;    // gauge width
-    const int   GAP = 10;   // gap between the two bars
-    // Center the pair horizontally
+    const int   GH = 200, GW = 22, GAP = 10;
     const int   pairW  = GW * 2 + GAP;
-    const int   leftX  = SCREEN_W / 2 - pairW / 2;   // BOSS gauge
-    const int   rightX = leftX + GW + GAP;            // ALT gauge
+    const int   leftX  = SCREEN_W / 2 - pairW / 2;
+    const int   rightX = leftX + GW + GAP;
     const int   gaugeY = SCREEN_H - GH - 44;
 
-    // ── LEFT bar: Boss HP gauge (or wave progress) ────────────────────────────
+    // ── LEFT bar: Boss HP ─────────────────────────────────────────────────────
     DrawRectangle(leftX, gaugeY, GW, GH, DARKGRAY);
-
-    // Find the boss (if alive)
     const Enemy* boss = nullptr;
     for (const auto& e : enemies)
         if (e.type == EnemyType::Boss && e.IsAlive()) { boss = &e; break; }
@@ -435,51 +462,54 @@ void Game::DrawHUD() {
     if (boss) {
         float hpRatio = (float)boss->hp / boss->maxHp;
         int   hpPx    = (int)(GH * hpRatio);
-        // Colour shifts red as boss takes damage
-        Color hpCol = {(unsigned char)(255 * (1.0f - hpRatio)),
-                       (unsigned char)(255 * hpRatio), 0, 255};
-        DrawRectangle(leftX, gaugeY + GH - hpPx, GW, hpPx, hpCol);
-        DrawText("BOSS",                     leftX,     gaugeY - 28, 13, PURPLE);
-        DrawText(TextFormat("%d", boss->hp),  leftX + 1, gaugeY - 14, 13, hpCol);
+        Color bossCol = {(unsigned char)(255 * (1.0f - hpRatio)),
+                         (unsigned char)(255 * hpRatio), 0, 255};
+        DrawRectangle(leftX, gaugeY + GH - hpPx, GW, hpPx, bossCol);
+        DrawText("BOSS",                      leftX,     gaugeY - 28, 13, PURPLE);
+        DrawText(TextFormat("%d", boss->hp),   leftX + 1, gaugeY - 14, 13, bossCol);
     } else {
-        // Show next-boss wave countdown
-        int nextBossWave = ((wave / 3) + 1) * 3;
         DrawRectangle(leftX, gaugeY, GW, GH, {30, 0, 60, 255});
-        DrawText("NEXT",                                leftX - 2, gaugeY - 28, 12, PURPLE);
-        DrawText(TextFormat("W%d",  nextBossWave),      leftX - 2, gaugeY - 14, 12, PURPLE);
+        DrawText("BOSS",           leftX - 2, gaugeY - 28, 12, PURPLE);
+        DrawText("WAIT",           leftX - 2, gaugeY - 14, 12, DARKPURPLE);
     }
     DrawRectangleLines(leftX, gaugeY, GW, GH, PURPLE);
     DrawText("BOSS", leftX, gaugeY + GH + 5, 12, PURPLE);
 
-    // ── RIGHT bar: Player altitude meter ─────────────────────────────────────
+    // ── RIGHT bar: Altitude meter ─────────────────────────────────────────────
     DrawRectangle(rightX, gaugeY, GW, GH, DARKGRAY);
-
     float playerR = Clamp((player.pos.y - ALT_MIN) / altRange, 0.0f, 1.0f);
-    // Altitude fill
-    int altFill = (int)(GH * playerR);
+    int   altFill = (int)(GH * playerR);
     DrawRectangle(rightX, gaugeY + GH - altFill, GW, altFill, SKYBLUE);
 
-    // Tick marks: every 1 unit minor, every 2 units major with label
     for (int a = 1; a <= (int)ALT_MAX; ++a) {
-        float r      = (a - ALT_MIN) / altRange;
-        int   ty     = gaugeY + GH - (int)(GH * r);
-        bool  major  = (a % 2 == 0);
-        int   tLen   = major ? 7 : 4;
-        Color tCol   = major ? WHITE : LIGHTGRAY;
-        // ticks on BOTH sides
-        DrawLine(rightX - tLen, ty, rightX,       ty, tCol);
-        DrawLine(rightX + GW,   ty, rightX+GW+tLen, ty, tCol);
-        if (major)
-            DrawText(TextFormat("%d", a), rightX + GW + tLen + 2, ty - 7, 12, LIGHTGRAY);
+        float r   = (a - ALT_MIN) / altRange;
+        int   ty  = gaugeY + GH - (int)(GH * r);
+        bool  maj = (a % 2 == 0);
+        int   tL  = maj ? 7 : 4;
+        Color tC  = maj ? WHITE : LIGHTGRAY;
+        DrawLine(rightX - tL, ty, rightX,        ty, tC);
+        DrawLine(rightX + GW, ty, rightX + GW + tL, ty, tC);
+        if (maj)
+            DrawText(TextFormat("%d", a), rightX + GW + tL + 2, ty - 7, 12, LIGHTGRAY);
     }
-
     DrawRectangleLines(rightX, gaugeY, GW, GH, WHITE);
-    DrawText("ALT",                         rightX + 1,  gaugeY + GH + 5,  12, SKYBLUE);
+    DrawText("ALT",                            rightX + 1, gaugeY + GH + 5,  12, SKYBLUE);
     DrawText(TextFormat("%.1f", player.pos.y), rightX - 6, gaugeY + GH + 18, 12, SKYBLUE);
 
-    // ── Controls (bottom-left) ────────────────────────────────────────────────
-    DrawText("Arrows: Move/Alt   Z: Shot   X: Spread   C: Bomb   SPACE: Boost",
-             20, SCREEN_H - 26, 15, LIGHTGRAY);
+    // ── Controls ──────────────────────────────────────────────────────────────
+    DrawText("Arrows:Move/Alt  Z:Missile  X:Bomb(Ground)  C:ScreenBomb  SPC:Boost",
+             12, SCREEN_H - 26, 13, LIGHTGRAY);
+
+    // ── Stage Clear overlay ───────────────────────────────────────────────────
+    if (stageClearTimer > 0.0f) {
+        DrawRectangle(0, 0, SCREEN_W, SCREEN_H, {0, 0, 0, 140});
+        const char* ct = TextFormat("STAGE %d CLEAR!", currentStage);
+        int cw = MeasureText(ct, 56);
+        DrawText(ct, SCREEN_W / 2 - cw / 2, SCREEN_H / 2 - 40, 56, GOLD);
+        const char* nt = TextFormat("STAGE %d  INCOMING", currentStage + 1);
+        int nw = MeasureText(nt, 26);
+        DrawText(nt, SCREEN_W / 2 - nw / 2, SCREEN_H / 2 + 30, 26, ORANGE);
+    }
 
     // ── Game Over overlay ─────────────────────────────────────────────────────
     if (gameOver) {
@@ -487,11 +517,11 @@ void Game::DrawHUD() {
         const char* goText = "GAME OVER";
         int tw = MeasureText(goText, 72);
         DrawText(goText, SCREEN_W / 2 - tw / 2, SCREEN_H / 2 - 70, 72, RED);
-        const char* st = TextFormat("Final Score: %d", score);
-        int sw = MeasureText(st, 32);
-        DrawText(st, SCREEN_W / 2 - sw / 2, SCREEN_H / 2 + 16, 32, WHITE);
+        const char* st = TextFormat("Final Score: %d  (Stage %d)", score, currentStage);
+        int sw = MeasureText(st, 28);
+        DrawText(st, SCREEN_W / 2 - sw / 2, SCREEN_H / 2 + 16, 28, WHITE);
         const char* rt = "Press  R  to restart";
         int rw = MeasureText(rt, 24);
-        DrawText(rt, SCREEN_W / 2 - rw / 2, SCREEN_H / 2 + 62, 24, LIGHTGRAY);
+        DrawText(rt, SCREEN_W / 2 - rw / 2, SCREEN_H / 2 + 58, 24, LIGHTGRAY);
     }
 }

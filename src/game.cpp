@@ -161,7 +161,7 @@ void Game::Update(float dt) {
     scrollSpeed = IsKeyDown(KEY_SPACE) ? SCROLL_BOOST : SCROLL_DEFAULT;
 
     // Wave: score threshold
-    wave = 1 + (int)(score / 2000);
+    wave = 1 + (int)(score / 300);   // wave 2 at 300pts (~3 kills), 3 at 600, etc.
 
     if (!player.IsAlive()) gameOver = true;
 
@@ -294,8 +294,9 @@ void Game::UpdateCamera() {
     //   +Y world (altitude)                   → up on screen
     const float D          = 32.0f;
     const float LOOK_AHEAD = 15.0f;   // more look-ahead for portrait (player lower-left)
-    camera.position   = {player.pos.x - D, D, player.pos.z + D};
-    camera.target     = {player.pos.x + LOOK_AHEAD, 0.0f, player.pos.z};
+    // Z is fixed — camera does NOT follow player's left/right movement
+    camera.position   = {player.pos.x - D, D, D};
+    camera.target     = {player.pos.x + LOOK_AHEAD, 0.0f, 0.0f};
     camera.up         = {0.0f, 1.0f, 0.0f};
     // Portrait 720x1080 (2:3): fovy sets world-unit height; width = fovy*(720/1080)=fovy*0.67
     camera.fovy       = 36.0f;

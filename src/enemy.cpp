@@ -95,6 +95,15 @@ void Enemy::Update(float dt, Vector3 playerPos, std::vector<Bullet>& enemyBullet
 }
 
 void Enemy::Draw() const {
+    // ── Altitude indicator: ground shadow + vertical pole ─────────────────────
+    if (pos.y > 0.3f) {
+        Color shadowCol = {255, 60, 60, 120};
+        Color lineCol   = {255, 120, 120, 180};
+        DrawCircle3D({pos.x, 0.05f, pos.z}, collisionRadius * 0.7f,
+                     {1.0f, 0.0f, 0.0f}, 90.0f, shadowCol);
+        DrawLine3D({pos.x, 0.1f, pos.z}, {pos.x, pos.y - collisionRadius * 0.5f, pos.z}, lineCol);
+    }
+
     switch (type) {
         case EnemyType::Fighter:
             DrawCube(pos, 2.0f, 0.4f, 1.5f, RED);

@@ -60,12 +60,15 @@ void Player::Update(float dt, std::vector<Bullet>& playerBullets, float scrollSp
 }
 
 void Player::Draw() const {
-    // ── Ground shadow — altitude indicator (Zaxxon style) ─────────────────────
-    float altRatio    = (pos.y - 0.5f) / 9.5f;           // 0 = ground, 1 = ceiling
-    float shadowR     = Lerp(1.5f, 0.4f, altRatio);
-    unsigned char sha = (unsigned char)Lerp(180.0f, 30.0f, altRatio);
+    // ── Ground shadow + altitude line (Zaxxon style) ─────────────────────────
+    float altRatio    = (pos.y - 0.5f) / 9.5f;
+    float shadowR     = Lerp(1.6f, 0.5f, altRatio);
+    unsigned char sha = (unsigned char)Lerp(200.0f, 40.0f, altRatio);
+    // Shadow cross on the ground
     DrawCircle3D({pos.x, 0.05f, pos.z}, shadowR,
-                 {1.0f, 0.0f, 0.0f}, 90.0f, {0, 0, 0, sha});
+                 {1.0f, 0.0f, 0.0f}, 90.0f, {0, 100, 255, sha});
+    // Vertical dashed line from ground to plane (altitude pole)
+    DrawLine3D({pos.x, 0.1f, pos.z}, {pos.x, pos.y - 0.3f, pos.z}, {100, 180, 255, 200});
 
     // ── Flicker during invincibility ──────────────────────────────────────────
     if (invincibleTimer > 0.0f && ((int)(GetTime() * 12) % 2) == 0) return;

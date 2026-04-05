@@ -46,10 +46,10 @@ void Player::Update(float dt, std::vector<Bullet>& playerBullets, float scrollSp
     if (IsKeyDown(KEY_X) && secondaryTimer <= 0.0f) {
         secondaryTimer = BOMB_RATE;
         Vector3 bPos = {pos.x + 1.2f, pos.y, pos.z};
-        // Forward vel keeps bomb ahead while it arcs down; gravity = -10 pulls it to ground
+        // Steeper arc: low initial loft, high gravity → drops quickly to ground
         playerBullets.emplace_back(bPos,
-            Vector3{scrollSpeed + 20.0f, 4.0f, 0.0f},
-            0.4f, 5, BulletOwner::Player, GOLD, 6.0f, -10.0f, true);
+            Vector3{scrollSpeed + 14.0f, 1.5f, 0.0f},
+            0.4f, 5, BulletOwner::Player, GOLD, 6.0f, -22.0f, true);
     }
 
     // ── C: Bomb ───────────────────────────────────────────────────────────────

@@ -131,7 +131,9 @@ void Game::UpdateStage(float dt) {
     for (auto& trig : spawnQueue) {
         if (!trig.fired && progress >= trig.relX) {
             trig.fired = true;
-            float spawnX = player.pos.x + ENEMY_SPAWN_X;
+            // Boss spawns further ahead so player has room to react
+            float spawnX = player.pos.x +
+                           (trig.type == EnemyType::Boss ? ENEMY_SPAWN_X * 2.5f : ENEMY_SPAWN_X);
             enemies.emplace_back(Vector3{spawnX, trig.y, trig.z}, trig.type);
         }
     }
@@ -230,7 +232,15 @@ void Game::Update(float dt) {
     bombEffects.erase(std::remove_if(bombEffects.begin(), bombEffects.end(),
         [](const BombEffect& bf){ return !bf.active; }), bombEffects.end());
 
-    scrollSpeed = IsKeyDown(KEY_SPACE) ? SCROLL_BOOST : SCROLL_DEFAULT;
+    // Stop scrolling during boss fight so player can maneuver in fixed arena
+    bool bossOnScreen = false;
+    for (const auto& e : enemies)
+        if (e.type == EnemyType::Boss && e.IsAlive()) { bossOnScreen = true; break; }
+
+    if (bossOnScreen)
+        scrollSpeed = 0.0f;
+    else
+        scrollSpeed = IsKeyDown(KEY_SPACE) ? SCROLL_BOOST : SCROLL_DEFAULT;
 
     if (!player.IsAlive()) gameOver = true;
 
@@ -425,8 +435,15 @@ void Game::DrawHUD() {
     bool boosting = IsKeyDown(KEY_SPACE);
     DrawText(TextFormat("SCORE %06d", score),    SCREEN_W - 210, 20, 20, WHITE);
     DrawText(TextFormat("STAGE  %d", currentStage), SCREEN_W - 210, 46, 18, ORANGE);
-    DrawText(boosting ? "BOOST!" : "NORMAL",         SCREEN_W - 210, 70, 16,
-             boosting ? YELLOW : LIGHTGRAY);
+    bool bossOnHUD = false;
+    for (const auto& e : enemies)
+        if (e.type == EnemyType::Boss && e.IsAlive()) { bossOnHUD = true; break; }
+
+    if (bossOnHUD)
+        DrawText("BOSS FIGHT", SCREEN_W - 210, 70, 16, RED);
+    else
+        DrawText(boosting ? "BOOST!" : "NORMAL", SCREEN_W - 210, 70, 16,
+                 boosting ? YELLOW : LIGHTGRAY);
 
     // ── Stage progress bar (top-right, below stage label) ────────────────────
     float stageProgress = Clamp((player.pos.x - stageStartX) / STAGE_LENGTH, 0.0f, 1.0f);

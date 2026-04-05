@@ -12,7 +12,7 @@ Game::Game()
       scrollSpeed(SCROLL_DEFAULT),
       worldGenX(0.0f),
       enemySpawnTimer(2.0f), enemySpawnInterval(3.0f),
-      gameOver(false)
+      gameOver(false), bossAlive(false), lastBossWave(0)
 {
     InitWindow(SCREEN_W, SCREEN_H, "Proto Shoot — Zaxxon Style");
     SetTargetFPS(60);
@@ -45,7 +45,6 @@ void Game::Reset() {
     enemies.clear();
     playerBullets.clear();
     enemyBullets.clear();
-    walls.clear();
     buildings.clear();
     bombEffects.clear();
     score       = 0;
@@ -54,7 +53,9 @@ void Game::Reset() {
     worldGenX   = player.pos.x;
     enemySpawnTimer    = 2.0f;
     enemySpawnInterval = 3.0f;
-    gameOver = false;
+    gameOver     = false;
+    bossAlive    = false;
+    lastBossWave = 0;
     GenerateAhead();
     UpdateCamera();
 }
@@ -65,11 +66,8 @@ void Game::Reset() {
 
 void Game::GenerateAhead() {
     std::uniform_real_distribution<float> zDist(-ARENA_Z_HALF + 2.5f, ARENA_Z_HALF - 2.5f);
-    std::uniform_real_distribution<float> gapBotDist(1.5f, 6.0f);
-    std::uniform_real_distribution<float> gapSizeDist(2.8f, 4.5f);
     std::uniform_real_distribution<float> bwDist(1.0f, 3.5f);
     std::uniform_real_distribution<float> bhDist(0.8f, 3.2f);
-    std::uniform_int_distribution<int>    wallChance(0, 4);
     std::uniform_int_distribution<int>    numBldg(1, 3);
 
     float genTarget = player.pos.x + GEN_LOOKAHEAD;
@@ -77,18 +75,7 @@ void Game::GenerateAhead() {
     while (worldGenX < genTarget) {
         worldGenX += SECTION_LEN;
 
-        // ── Wall (roughly every 4-5 sections) ────────────────────────────────
-        if (wallChance(rng) == 0) {
-            Wall w;
-            w.x         = worldGenX;
-            w.gapBottom = gapBotDist(rng);
-            w.gapTop    = w.gapBottom + gapSizeDist(rng);
-            if (w.gapTop > WALL_HEIGHT - 0.5f) w.gapTop = WALL_HEIGHT - 0.5f;
-            w.passed = false;
-            walls.push_back(w);
-        }
-
-        // ── Buildings (ground-level hazards / scenery) ────────────────────────
+        // ── Buildings (ground-level scenery) ──────────────────────────────────
         int n = numBldg(rng);
         for (int i = 0; i < n; ++i) {
             float bw = bwDist(rng);
@@ -104,10 +91,8 @@ void Game::GenerateAhead() {
         }
     }
 
-    // ── Cleanup old content behind the player ─────────────────────────────────
+    // ── Cleanup old buildings behind the player ───────────────────────────────
     float cutX = player.pos.x - DESPAWN_BEHIND;
-    walls.erase(std::remove_if(walls.begin(), walls.end(),
-        [cutX](const Wall& w) { return w.x < cutX; }), walls.end());
     buildings.erase(std::remove_if(buildings.begin(), buildings.end(),
         [cutX](const Building& b) { return b.pos.x + b.halfSize.x < cutX; }), buildings.end());
 }
@@ -160,6 +145,11 @@ void Game::Update(float dt) {
             return !e.IsAlive() || (e.pos.x < player.pos.x - DESPAWN_BEHIND);
         }), enemies.end());
 
+    // Track whether a boss is currently alive
+    bossAlive = false;
+    for (const auto& e : enemies)
+        if (e.type == EnemyType::Boss && e.IsAlive()) { bossAlive = true; break; }
+
     playerBullets.erase(std::remove_if(playerBullets.begin(), playerBullets.end(),
         [](const Bullet& b) { return !b.active; }), playerBullets.end());
     enemyBullets.erase(std::remove_if(enemyBullets.begin(), enemyBullets.end(),
@@ -184,18 +174,26 @@ void Game::Update(float dt) {
 
 void Game::SpawnEnemy() {
     std::uniform_real_distribution<float> zDist(-ARENA_Z_HALF + 2.0f, ARENA_Z_HALF - 2.0f);
-    std::uniform_real_distribution<float> yDist(0.5f, 8.0f);
+    std::uniform_real_distribution<float> yDist(2.0f, 7.0f);
     std::uniform_real_distribution<float> typeDist(0.0f, 1.0f);
 
     float spawnX = player.pos.x + ENEMY_SPAWN_X;
+
+    // Spawn a boss every 3rd wave (wave 3, 6, 9...) if none is alive
+    if (wave >= 3 && wave % 3 == 0 && wave != lastBossWave && !bossAlive) {
+        lastBossWave = wave;
+        bossAlive    = true;
+        enemies.emplace_back(Vector3{spawnX, 4.0f, 0.0f}, EnemyType::Boss);
+        return;
+    }
+
     float spawnZ = zDist(rng);
-    float r = typeDist(rng);
+    float r      = typeDist(rng);
 
     EnemyType type;
-    if      (wave >= 3 && r < 0.20f) type = EnemyType::Flanker;
-    else if (wave >= 2 && r < 0.35f) type = EnemyType::Turret;
-    else if (             r < 0.15f) type = EnemyType::Kamikaze;
-    else                             type = EnemyType::Fighter;
+    if      (wave >= 3 && r < 0.25f) type = EnemyType::Flanker;
+    else if (wave >= 2 && r < 0.45f) type = EnemyType::Turret;
+    else                              type = EnemyType::Fighter;
 
     float spawnY = (type == EnemyType::Turret) ? 0.5f : yDist(rng);
 
@@ -259,20 +257,6 @@ void Game::CheckCollisions() {
             player.TakeDamage(1);
     }
 
-    // ── Player vs walls (core Zaxxon mechanic) ────────────────────────────────
-    for (auto& w : walls) {
-        float dx = fabsf(player.pos.x - w.x);
-        if (dx < WALL_THICKNESS * 0.5f + 0.9f) {
-            bool inGap = (player.pos.y >= w.gapBottom && player.pos.y <= w.gapTop);
-            if (!inGap) {
-                player.TakeDamage(1);
-            } else if (!w.passed && player.pos.x >= w.x) {
-                w.passed = true;
-                score += 50;   // bonus for clean wall pass
-            }
-        }
-    }
-
     // ── Player vs buildings ───────────────────────────────────────────────────
     for (const auto& bld : buildings) {
         BoundingBox bb = {
@@ -282,19 +266,6 @@ void Game::CheckCollisions() {
         if (CheckCollisionBoxSphere(bb, player.pos, 0.8f))
             player.TakeDamage(1);
     }
-
-    // ── Bullets vs walls ──────────────────────────────────────────────────────
-    auto blockByWalls = [&](Bullet& b) {
-        if (!b.active) return;
-        for (const auto& w : walls) {
-            if (fabsf(b.pos.x - w.x) < WALL_THICKNESS * 0.5f + b.radius) {
-                bool inGap = (b.pos.y >= w.gapBottom && b.pos.y <= w.gapTop);
-                if (!inGap) { b.active = false; return; }
-            }
-        }
-    };
-    for (auto& b : playerBullets) blockByWalls(b);
-    for (auto& b : enemyBullets)  blockByWalls(b);
 
     // ── Player bullets vs buildings ───────────────────────────────────────────
     for (auto& b : playerBullets) {
@@ -342,7 +313,6 @@ void Game::Draw() {
     BeginMode3D(camera);
         DrawTerrain();
         DrawBuildings();
-        DrawWalls();
         DrawBombEffects();
         player.Draw();
         for (const auto& e : enemies)       e.Draw();
@@ -373,33 +343,6 @@ void Game::DrawTerrain() {
     Color bc = {80, 80, 200, 180};
     DrawLine3D({x0, 0.05f, -ARENA_Z_HALF}, {x1, 0.05f, -ARENA_Z_HALF}, bc);
     DrawLine3D({x0, 0.05f,  ARENA_Z_HALF}, {x1, 0.05f,  ARENA_Z_HALF}, bc);
-}
-
-void Game::DrawWalls() {
-    Color wallCol = {110, 115, 125, 255};
-    Color wireCol = { 60,  65,  75, 255};
-    const float halfZ = ARENA_Z_HALF * 2.0f;
-
-    for (const auto& w : walls) {
-        // Bottom section: ground → gapBottom
-        if (w.gapBottom > 0.05f) {
-            float h   = w.gapBottom;
-            Vector3 p = {w.x, h * 0.5f, 0.0f};
-            DrawCube(p, WALL_THICKNESS, h, halfZ, wallCol);
-            DrawCubeWires(p, WALL_THICKNESS, h, halfZ, wireCol);
-        }
-        // Top section: gapTop → WALL_HEIGHT
-        float topH = WALL_HEIGHT - w.gapTop;
-        if (topH > 0.05f) {
-            Vector3 p = {w.x, w.gapTop + topH * 0.5f, 0.0f};
-            DrawCube(p, WALL_THICKNESS, topH, halfZ, wallCol);
-            DrawCubeWires(p, WALL_THICKNESS, topH, halfZ, wireCol);
-        }
-        // Gap highlight line (shows the opening altitude)
-        Color gapCol = {200, 200, 80, 160};
-        DrawLine3D({w.x, w.gapBottom, -ARENA_Z_HALF}, {w.x, w.gapBottom, ARENA_Z_HALF}, gapCol);
-        DrawLine3D({w.x, w.gapTop,    -ARENA_Z_HALF}, {w.x, w.gapTop,    ARENA_Z_HALF}, gapCol);
-    }
 }
 
 void Game::DrawBuildings() {
@@ -468,8 +411,7 @@ void Game::DrawHUD() {
         DrawRectangle(bx, by, (int)(bw * (float)e.hp / e.maxHp), 5, LIME);
     }
 
-    // ══ Center dual gauge: [WALL GAP] | [ALTITUDE] ═══════════════════════════
-    //   Both bars share the same altitude scale: ALT_MIN(0.5) → ALT_MAX(10.0)
+    // ══ Center dual gauge: [BOSS HP] | [ALTITUDE] ════════════════════════════
     const float ALT_MIN  = 0.5f, ALT_MAX = 10.0f;
     const float altRange = ALT_MAX - ALT_MIN;
     const int   GH = 200;   // gauge height in pixels
@@ -477,65 +419,43 @@ void Game::DrawHUD() {
     const int   GAP = 10;   // gap between the two bars
     // Center the pair horizontally
     const int   pairW  = GW * 2 + GAP;
-    const int   leftX  = SCREEN_W / 2 - pairW / 2;       // WALL gauge
-    const int   rightX = leftX + GW + GAP;                // ALT gauge
+    const int   leftX  = SCREEN_W / 2 - pairW / 2;   // BOSS gauge
+    const int   rightX = leftX + GW + GAP;            // ALT gauge
     const int   gaugeY = SCREEN_H - GH - 44;
 
-    // ── Find nearest upcoming wall ────────────────────────────────────────────
-    const Wall* nextWall = nullptr;
-    float       wallDist = 1e9f;
-    for (const auto& w : walls) {
-        float d = w.x - player.pos.x;
-        if (d > 0.0f && d < wallDist) { wallDist = d; nextWall = &w; }
-    }
-
-    // ── LEFT bar: Wall gap gauge ──────────────────────────────────────────────
+    // ── LEFT bar: Boss HP gauge (or wave progress) ────────────────────────────
     DrawRectangle(leftX, gaugeY, GW, GH, DARKGRAY);
 
-    if (nextWall) {
-        // Danger (red) — bottom zone: ALT_MIN → gapBottom
-        float botRatio = Clamp((nextWall->gapBottom - ALT_MIN) / altRange, 0.0f, 1.0f);
-        int   botPx    = (int)(GH * botRatio);
-        if (botPx > 0)
-            DrawRectangle(leftX, gaugeY + GH - botPx, GW, botPx, RED);
+    // Find the boss (if alive)
+    const Enemy* boss = nullptr;
+    for (const auto& e : enemies)
+        if (e.type == EnemyType::Boss && e.IsAlive()) { boss = &e; break; }
 
-        // Safe (green) — gap zone: gapBottom → gapTop
-        float gapBotR = Clamp((nextWall->gapBottom - ALT_MIN) / altRange, 0.0f, 1.0f);
-        float gapTopR = Clamp((nextWall->gapTop    - ALT_MIN) / altRange, 0.0f, 1.0f);
-        int   gapY1   = gaugeY + GH - (int)(GH * gapTopR);
-        int   gapY2   = gaugeY + GH - (int)(GH * gapBotR);
-        if (gapY2 > gapY1)
-            DrawRectangle(leftX, gapY1, GW, gapY2 - gapY1, {0, 200, 0, 255});
-
-        // Danger (red) — top zone: gapTop → ALT_MAX
-        float topRatio = Clamp((ALT_MAX - nextWall->gapTop) / altRange, 0.0f, 1.0f);
-        int   topPx    = (int)(GH * topRatio);
-        if (topPx > 0)
-            DrawRectangle(leftX, gaugeY, GW, topPx, RED);
-
-        // Distance label — colour changes as wall approaches
-        Color dc = (wallDist < 12.0f) ? RED : (wallDist < 25.0f) ? YELLOW : WHITE;
-        DrawText(TextFormat("WALL"), leftX + 1, gaugeY - 28, 13, dc);
-        DrawText(TextFormat("%.0f", wallDist), leftX + 1, gaugeY - 14, 13, dc);
+    if (boss) {
+        float hpRatio = (float)boss->hp / boss->maxHp;
+        int   hpPx    = (int)(GH * hpRatio);
+        // Colour shifts red as boss takes damage
+        Color hpCol = {(unsigned char)(255 * (1.0f - hpRatio)),
+                       (unsigned char)(255 * hpRatio), 0, 255};
+        DrawRectangle(leftX, gaugeY + GH - hpPx, GW, hpPx, hpCol);
+        DrawText("BOSS",                     leftX,     gaugeY - 28, 13, PURPLE);
+        DrawText(TextFormat("%d", boss->hp),  leftX + 1, gaugeY - 14, 13, hpCol);
     } else {
-        // No wall coming — all clear
-        DrawRectangle(leftX, gaugeY, GW, GH, {0, 90, 0, 255});
-        DrawText("CLEAR", leftX - 4, gaugeY - 14, 12, GREEN);
+        // Show next-boss wave countdown
+        int nextBossWave = ((wave / 3) + 1) * 3;
+        DrawRectangle(leftX, gaugeY, GW, GH, {30, 0, 60, 255});
+        DrawText("NEXT",                                leftX - 2, gaugeY - 28, 12, PURPLE);
+        DrawText(TextFormat("W%d",  nextBossWave),      leftX - 2, gaugeY - 14, 12, PURPLE);
     }
-
-    // Player altitude line on wall gauge
-    float playerR    = Clamp((player.pos.y - ALT_MIN) / altRange, 0.0f, 1.0f);
-    int   playerLineY = gaugeY + GH - (int)(GH * playerR);
-    DrawRectangle(leftX - 4, playerLineY - 2, GW + 8, 4, WHITE);
-
-    DrawRectangleLines(leftX, gaugeY, GW, GH, WHITE);
-    DrawText("WALL", leftX, gaugeY + GH + 5, 12, GRAY);
+    DrawRectangleLines(leftX, gaugeY, GW, GH, PURPLE);
+    DrawText("BOSS", leftX, gaugeY + GH + 5, 12, PURPLE);
 
     // ── RIGHT bar: Player altitude meter ─────────────────────────────────────
     DrawRectangle(rightX, gaugeY, GW, GH, DARKGRAY);
 
+    float playerR = Clamp((player.pos.y - ALT_MIN) / altRange, 0.0f, 1.0f);
     // Altitude fill
-    int altFill = (int)(GH * Clamp(playerR, 0.0f, 1.0f));
+    int altFill = (int)(GH * playerR);
     DrawRectangle(rightX, gaugeY + GH - altFill, GW, altFill, SKYBLUE);
 
     // Tick marks: every 1 unit minor, every 2 units major with label

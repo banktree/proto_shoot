@@ -6,14 +6,6 @@
 #include <vector>
 #include <random>
 
-// Walls span the full Z width; player must be within the altitude gap to pass.
-struct Wall {
-    float x;
-    float gapBottom;   // gap opens at this altitude
-    float gapTop;      // gap closes at this altitude
-    bool  passed;      // true once player crosses without hitting
-};
-
 // Ground-level scenery / hazard buildings
 struct Building {
     Vector3 pos;
@@ -38,12 +30,11 @@ private:
     void Update(float dt);
     void Draw();
     void DrawTerrain();
-    void DrawWalls();
     void DrawBuildings();
     void DrawBombEffects();
     void DrawHUD();
 
-    void GenerateAhead();   // spawn walls/buildings ahead of player
+    void GenerateAhead();   // spawn buildings ahead of player
     void SpawnEnemy();
     void CheckCollisions();
     void UpdateCamera();
@@ -56,7 +47,6 @@ private:
     std::vector<Enemy>      enemies;
     std::vector<Bullet>     playerBullets;
     std::vector<Bullet>     enemyBullets;
-    std::vector<Wall>       walls;
     std::vector<Building>   buildings;
     std::vector<BombEffect> bombEffects;
 
@@ -68,13 +58,13 @@ private:
     float enemySpawnTimer;
     float enemySpawnInterval;
     bool  gameOver;
+    bool  bossAlive;       // true while a Boss enemy is on screen
+    int   lastBossWave;    // wave at which the last boss was spawned
 
     std::mt19937 rng;
 
     // ── Tunable constants ─────────────────────────────────────────────────────
     static constexpr float ARENA_Z_HALF    = 12.0f;  // narrowed for portrait
-    static constexpr float WALL_HEIGHT     = 12.0f;
-    static constexpr float WALL_THICKNESS  =  1.5f;
     static constexpr float SECTION_LEN     = 12.0f;
     static constexpr float GEN_LOOKAHEAD   = 70.0f;
     static constexpr float DESPAWN_BEHIND  = 35.0f;

@@ -3,11 +3,11 @@
 #include "bullet.h"
 #include <vector>
 
-// Fighter  : aerial, advances in -X, tracks player Z
-// Kamikaze : fast, beelines directly at player
-// Turret   : stationary on ground, shoots at player
-// Flanker  : zigzags in Z while advancing in -X
-enum class EnemyType { Fighter, Kamikaze, Turret, Flanker };
+// Fighter : aerial, advances in -X, tracks player Z/Y
+// Turret  : stationary on ground, shoots at player
+// Flanker : zigzags in Z while advancing in -X
+// Boss    : large craft, high HP, multi-directional fire
+enum class EnemyType { Fighter, Turret, Flanker, Boss };
 
 class Enemy {
 public:
